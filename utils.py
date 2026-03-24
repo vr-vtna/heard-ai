@@ -55,14 +55,34 @@ def setup_logging() -> logging.Logger:
 logger = setup_logging()
 
 
+def _json_safe_value(value: Any) -> Any:
+    """Convert common non-JSON-native values (numpy/pandas) to plain Python types."""
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+
+    if isinstance(value, dict):
+        return {k: _json_safe_value(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_value(v) for v in value]
+
+    return value
+
+
 def log_event(event_name: str, **kwargs) -> None:
     """Log structured events as JSON"""
     event = {
         "event": event_name,
         "timestamp": datetime.now().isoformat(),
-        **kwargs
+        **{k: _json_safe_value(v) for k, v in kwargs.items()}
     }
-    logger.info(json.dumps(event))
+    logger.info(json.dumps(event, default=str))
 
 
 # ==================== DATA VALIDATION ====================
@@ -84,11 +104,11 @@ def validate_csv(df: pd.DataFrame) -> ValidationResult:
     warnings = []
     metrics = {}
     
-    # Check column count
+    # Check column count (warn only; required columns check determines validity)
     if len(df.columns) < cfg.EXPECTED_CSV_COLUMN_COUNT:
-        errors.append(
+        warnings.append(
             f"CSV has {len(df.columns)} columns, "
-            f"expected {cfg.EXPECTED_CSV_COLUMN_COUNT}"
+            f"expected around {cfg.EXPECTED_CSV_COLUMN_COUNT}"
         )
     
     # Check required columns exist (after renaming)
