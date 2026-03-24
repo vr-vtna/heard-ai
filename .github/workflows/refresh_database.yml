@@ -1,0 +1,72 @@
+name: Weekly Database Refresh
+
+on:
+  schedule:
+    # Every Sunday at 2 AM UTC
+    - cron: '0 2 * * 0'
+  
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  refresh-database:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          pip install pandas requests
+      
+      - name: Download latest database CSV
+        run: |
+          # Option 1: Download from URL
+          # curl -o data/az_database_list_$(date +%Y%m%d).csv \
+          #   "${{ secrets.CSV_DOWNLOAD_URL }}"
+          
+          # Option 2: Use your existing file and timestamp it
+          TIMESTAMP=$(date +%Y%m%d)
+          cp az_database_list_export_2026_02_24_cleaned.csv \
+             data/az_database_list_${TIMESTAMP}.csv
+          
+          echo "Database refreshed with timestamp: ${TIMESTAMP}"
+      
+      - name: Validate CSV
+        run: |
+          python -c "
+          import pandas as pd
+          import sys
+          try:
+              df = pd.read_csv('data/az_database_list_$(date +%Y%m%d).csv')
+              print(f'✓ CSV valid: {len(df)} databases loaded')
+              if len(df) < 100:
+                  print('⚠️ Warning: Database count seems low')
+                  sys.exit(1)
+          except Exception as e:
+              print(f'❌ Error: {e}')
+              sys.exit(1)
+          "
+      
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "Database Refresh Bot"
+          git add data/
+          git diff --quiet && git diff --staged --quiet || \
+            git commit -m "Auto-refresh database: $(date +'%Y-%m-%d')"
+          git push
+      
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Database refresh failed!"
+          # Add notification logic here (email, Slack, etc.)
