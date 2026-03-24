@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Optional
 import os
 
-
 @dataclass
 class Config:
     """Application configuration with environment variable overrides"""
@@ -20,8 +19,11 @@ class Config:
     SEARCH_TOP_K: int = int(os.getenv("SEARCH_TOP_K", "5"))
     SEARCH_BATCH_SIZE: int = int(os.getenv("SEARCH_BATCH_SIZE", "100"))
 
-    # ==================== AI/LLM ====================
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    # ==================== AMPLIFY API (new) ====================
+    AMPLIFY_BASE_URL: str = os.getenv("AMPLIFY_BASE_URL", "https://prod-api.vanderbilt.ai")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")   # model id from /available_models
+
+    # ==================== LLM SETTINGS ====================
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "800"))
     LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "30"))
@@ -56,30 +58,26 @@ class Config:
     EXPECTED_CSV_COLUMN_COUNT: int = 12
 
     # ==================== COST TRACKING ====================
-    TRACK_API_COSTS: bool = os.getenv("TRACK_API_COSTS", "true").lower() == "true"
+    TRACK_API_COSTS: bool = os.getenv("TRACK_API_COSTS", "false").lower() == "true"  # disabled by default
     COST_LOG_FILE: str = os.getenv("COST_LOG_FILE", "logs/api_costs.log")
 
     # ==================== VANDERBILT BRANDING ====================
     PRIMARY_COLOR: str = "#866D4B"  # Vanderbilt gold
-    SECONDARY_COLOR: str = "#6F5A3E"  # Darker gold
+    SECONDARY_COLOR: str = "#6F5A3E"
     TEXT_COLOR: str = "#000000"
     BG_COLOR: str = "#FFFFFF"
     SECONDARY_BG_COLOR: str = "#F8F9FA"
 
-
 # Create singleton instance
 config = Config()
-
 
 def get_config() -> Config:
     """Get global configuration instance"""
     return config
 
-
 def validate_config() -> bool:
     """Validate configuration consistency"""
     cfg = get_config()
-    
     errors = []
     
     if cfg.SEARCH_TOP_K < 1 or cfg.SEARCH_TOP_K > 20:
@@ -96,7 +94,7 @@ def validate_config() -> bool:
     
     if errors:
         for error in errors:
-            print(f"⚠️  Config error: {error}")
+            print(f"Warning: Config error: {error}")
         return False
     
     return True

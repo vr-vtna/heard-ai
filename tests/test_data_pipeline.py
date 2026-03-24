@@ -13,7 +13,6 @@ from config import Config, get_config, validate_config
 from utils import (
     validate_csv, 
     RateLimiter, 
-    CostTracker, 
     calculate_data_quality,
     ValidationResult
 )
@@ -137,56 +136,6 @@ class TestRateLimiter:
         
         status = limiter.is_allowed()
         assert status.is_allowed is True
-
-
-# ==================== COST TRACKING TESTS ====================
-
-class TestCostTracker:
-    """Test API cost tracking"""
-    
-    def test_cost_calculation(self):
-        """Test cost calculation for API call"""
-        tracker = CostTracker()
-        cost = tracker.calculate_cost(
-            model="gpt-4o-mini",
-            prompt_tokens=100,
-            completion_tokens=50
-        )
-        
-        assert cost.model == "gpt-4o-mini"
-        assert cost.total_tokens == 150
-        assert cost.cost_usd > 0
-    
-    def test_cost_accumulation(self):
-        """Test cost tracking accumulates correctly"""
-        tracker = CostTracker()
-        
-        tracker.calculate_cost("gpt-4o-mini", 100, 50)
-        tracker.calculate_cost("gpt-4o-mini", 100, 50)
-        
-        stats = tracker.get_stats()
-        assert stats['call_count'] == 2
-        assert "$" in stats['total_cost_usd']
-    
-    def test_cost_logging_format(self):
-        """Test cost logs are valid JSON"""
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False) as f:
-            temp_file = f.name
-        
-        try:
-            tracker = CostTracker()
-            tracker.cost_log = Path(temp_file)
-            
-            cost = tracker.calculate_cost("gpt-4o-mini", 100, 50)
-            tracker.log_cost(cost)
-            
-            with open(temp_file, 'r') as f:
-                line = f.readline()
-                data = json.loads(line)
-                assert 'model' in data
-                assert 'cost_usd' in data
-        finally:
-            Path(temp_file).unlink()
 
 
 # ==================== DATA QUALITY TESTS ====================

@@ -1,5 +1,13 @@
 .streamlit/secrets.toml
 
+# ChromaDB data (generated)
+chroma_data/
+chroma_data_test/
+chroma_data_test_v155/
+
+# Logs
+logs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

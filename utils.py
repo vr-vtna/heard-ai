@@ -219,94 +219,6 @@ class RateLimiter:
         )
 
 
-# ==================== COST TRACKING ====================
-
-@dataclass
-class APICallCost:
-    """Cost of an API call"""
-    model: str
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
-    cost_usd: float
-    timestamp: str
-
-
-class CostTracker:
-    """Track API usage costs"""
-    
-    # Pricing as of March 2026 (gpt-4o-mini)
-    PRICING = {
-        "gpt-4o-mini": {
-            "input": 0.00015 / 1000,      # $0.15 per 1M input tokens
-            "output": 0.0006 / 1000,     # $0.60 per 1M output tokens
-        }
-    }
-    
-    def __init__(self):
-        cfg = get_config()
-        self.cost_log = Path(cfg.COST_LOG_FILE)
-        self.cost_log.parent.mkdir(exist_ok=True)
-        self.total_cost = 0.0
-        self.call_count = 0
-    
-    def calculate_cost(
-        self, 
-        model: str, 
-        prompt_tokens: int, 
-        completion_tokens: int
-    ) -> APICallCost:
-        """Calculate cost of API call"""
-        pricing = self.PRICING.get(model, self.PRICING["gpt-4o-mini"])
-        
-        input_cost = prompt_tokens * pricing["input"]
-        output_cost = completion_tokens * pricing["output"]
-        total_cost = input_cost + output_cost
-        
-        self.total_cost += total_cost
-        self.call_count += 1
-        
-        return APICallCost(
-            model=model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-            cost_usd=total_cost,
-            timestamp=datetime.now().isoformat()
-        )
-    
-    def log_cost(self, cost: APICallCost) -> None:
-        """Log API cost to file"""
-        if not get_config().TRACK_API_COSTS:
-            return
-        
-        with open(self.cost_log, 'a') as f:
-            f.write(json.dumps({
-                "model": cost.model,
-                "tokens": cost.total_tokens,
-                "cost_usd": cost.cost_usd,
-                "timestamp": cost.timestamp
-            }) + "\n")
-        
-        log_event(
-            "api_call",
-            model=cost.model,
-            prompt_tokens=cost.prompt_tokens,
-            completion_tokens=cost.completion_tokens,
-            cost_usd=f"${cost.cost_usd:.4f}",
-            total_cost_usd=f"${self.total_cost:.2f}",
-            call_count=self.call_count
-        )
-    
-    def get_stats(self) -> Dict[str, Any]:
-        """Get cost statistics"""
-        return {
-            "total_cost_usd": f"${self.total_cost:.2f}",
-            "call_count": self.call_count,
-            "avg_cost_per_call": f"${self.total_cost / max(1, self.call_count):.4f}"
-        }
-
-
 # ==================== DATA QUALITY METRICS ====================
 
 def calculate_data_quality(df: pd.DataFrame) -> Dict[str, Any]:
@@ -336,7 +248,6 @@ def calculate_data_quality(df: pd.DataFrame) -> Dict[str, Any]:
 # ==================== SINGLETON INSTANCES ====================
 
 _rate_limiter: Optional[RateLimiter] = None
-_cost_tracker: Optional[CostTracker] = None
 
 
 def get_rate_limiter() -> RateLimiter:
@@ -345,11 +256,3 @@ def get_rate_limiter() -> RateLimiter:
     if _rate_limiter is None:
         _rate_limiter = RateLimiter(requests_per_minute=get_config().RATE_LIMIT_PER_MINUTE)
     return _rate_limiter
-
-
-def get_cost_tracker() -> CostTracker:
-    """Get or create cost tracker instance"""
-    global _cost_tracker
-    if _cost_tracker is None:
-        _cost_tracker = CostTracker()
-    return _cost_tracker

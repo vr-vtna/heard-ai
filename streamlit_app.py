@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import sys
+import requests
 
 # ChromaDB requires sqlite >= 3.35; swap in pysqlite3 when available.
 if sqlite3.sqlite_version_info < (3, 35, 0):
@@ -12,7 +13,6 @@ if sqlite3.sqlite_version_info < (3, 35, 0):
         pass
 
 import chromadb
-from openai import OpenAI, RateLimitError, APIConnectionError
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple, Any
 import os
@@ -25,8 +25,6 @@ from utils import (
     log_event,
     validate_csv,
     get_rate_limiter,
-    get_cost_tracker,
-    calculate_data_quality
 )
 
 # Validate config on startup
@@ -283,7 +281,6 @@ def init_vector_search(_df: pd.DataFrame) -> Optional[Any]:
 
             search_text = (
                 f"NAME: {row.get('Name', '')}\n"
-                f"NAME: {row.get('Name', '')}\n"
                 f"DESCRIPTION: {row.get('Description', '')}\n"
                 f"SUBJECTS: {row.get('Subjects', '')}\n"
                 f"KEYWORDS: {row.get('Alt_Names', '')}\n"
@@ -362,9 +359,9 @@ def search_databases(
 def generate_ai_response(
     query: str, 
     results: Dict, 
-    api_key: str
+    amp_token: str
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Generate AI-powered recommendations using GPT-4o-mini"""
+    """Generate AI-powered recommendations using Vanderbilt Amplify API"""
     
     # Check rate limit
     if cfg.RATE_LIMIT_ENABLED:
@@ -377,9 +374,6 @@ def generate_ai_response(
             return None, error_msg
     
     try:
-        client = OpenAI(api_key=api_key)
-        cost_tracker = get_cost_tracker()
-        
         # Format context from search results
         context_parts = []
         for i, meta in enumerate(results['metadatas'][0], 1):
@@ -389,12 +383,11 @@ def generate_ai_response(
    Description: {meta['description'][:300]}...
    Subjects: {meta['subjects']}
    Primary Library: {meta['primary_library']}
-   {f"Access Info: {meta['more_info'][:200]}" if meta['more_info'] else ""}
+   {f"Access Info: {meta['more_info'][:200]}" if meta.get('more_info') else ""}
 """)
-        
         context = "\n".join(context_parts)
-        
-        # System prompt with strict guidelines
+
+        # Strict Vanderbilt Library system prompt
         system_prompt = """You are the Vanderbilt University Library Database Assistant.
 
 Your role is to help students, faculty, and researchers discover the most relevant databases from Vanderbilt's collection.
@@ -413,53 +406,64 @@ Format your response as:
 2. List of 3-5 recommended databases with explanations
 3. Any additional helpful notes about access or usage"""
 
-        log_event("api_call_started", query=query, model=cfg.LLM_MODEL)
-        
-        response = client.chat.completions.create(
-            model=cfg.LLM_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Research Query: {query}\n\nAvailable Databases:\n{context}\n\nProvide relevant database recommendations:"}
-            ],
-            temperature=cfg.LLM_TEMPERATURE,
-            max_tokens=cfg.LLM_MAX_TOKENS,
+        log_event("api_call_started", query=query, model=cfg.LLM_MODEL, provider="amplify")
+
+        # Amplify /chat payload (matches official docs)
+        payload = {
+            "data": {
+                "temperature": cfg.LLM_TEMPERATURE,
+                "max_tokens": cfg.LLM_MAX_TOKENS,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Research Query: {query}\n\nAvailable Databases:\n{context}\n\nProvide relevant database recommendations:"}
+                ],
+                "options": {
+                    "ragOnly": False,
+                    "skipRag": True,
+                    "model": {"id": cfg.LLM_MODEL}
+                }
+            }
+        }
+
+        headers = {
+            "Authorization": f"Bearer {amp_token}",
+            "Content-Type": "application/json"
+        }
+
+        api_response = requests.post(
+            f"{cfg.AMPLIFY_BASE_URL}/chat",
+            json=payload,
+            headers=headers,
             timeout=cfg.LLM_TIMEOUT
         )
-        
-        # Track cost
-        cost = cost_tracker.calculate_cost(
-            model=cfg.LLM_MODEL,
-            prompt_tokens=response.usage.prompt_tokens,
-            completion_tokens=response.usage.completion_tokens
-        )
-        cost_tracker.log_cost(cost)
-        
-        log_event(
-            "api_call_completed",
-            model=cfg.LLM_MODEL,
-            prompt_tokens=response.usage.prompt_tokens,
-            completion_tokens=response.usage.completion_tokens,
-            cost_usd=f"${cost.cost_usd:.4f}"
-        )
-        
-        return response.choices[0].message.content, None
+        api_response.raise_for_status()
+
+        result = api_response.json()
+
+        if result.get("success"):
+            ai_text = result.get("data")
+            log_event("api_call_completed", model=cfg.LLM_MODEL, provider="amplify", success=True)
+            return ai_text, None
+        else:
+            error_msg = result.get("message", "Unknown Amplify error")
+            return None, f"Amplify API error: {error_msg}"
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            return None, "❌ Invalid Amplify token (401). Check AMPLIFY_TOKEN in secrets."
+        elif e.response.status_code == 400:
+            return None, "❌ Bad request to Amplify (400). Check payload / model id."
+        else:
+            return None, f"HTTP {e.response.status_code} error from Amplify."
     
-    except RateLimitError as e:
-        logger.error(f"Rate limit error: {e}")
-        detail = str(e).strip()
-        if detail:
-            return None, f"OpenAI API rate limit hit: {detail}"
-        return None, "OpenAI API rate limit hit. Try again in 60 seconds."
-    
-    except APIConnectionError as e:
-        error_msg = "Network error connecting to OpenAI. Check your connection and API key."
-        logger.error(f"API connection error: {e}")
-        return None, error_msg
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error to Amplify: {e}")
+        return None, f"Network error connecting to Amplify API: {str(e)}"
     
     except Exception as e:
-        logger.exception(f"AI response error: {e}")
-        log_event("ai_response_error", query=query, error=str(e))
-        return None, f"OpenAI request failed: {str(e)}"
+        logger.exception(f"Amplify response error: {e}")
+        log_event("ai_response_error", query=query, error=str(e), provider="amplify")
+        return None, f"Amplify request failed: {str(e)}"
 
 # ============================================
 # LOAD DATA
@@ -506,7 +510,13 @@ with col2:
 # ============================================
 
 with st.sidebar:
-    st.image("https://cdn.vanderbilt.edu/vu-wp0/wp-content/uploads/sites/59/2019/04/17094551/vu-logo.png", width=200)
+    st.markdown(f"""
+    <div style='text-align: center; padding: 10px 0 20px 0;'>
+        <h2 style='color: {cfg.PRIMARY_COLOR}; font-family: Georgia, serif; margin: 0;'>
+            VANDERBILT<br>UNIVERSITY LIBRARY
+        </h2>
+    </div>
+    """, unsafe_allow_html=True)
     
     st.markdown("### 📊 Database Statistics")
     
@@ -569,16 +579,8 @@ with st.sidebar:
     st.markdown("### ℹ️ About")
     st.caption("""
     This AI assistant helps you discover relevant databases from Vanderbilt's 
-    collection. It uses semantic search and GPT-4 to provide personalized recommendations.
+    collection. It uses semantic search and the Amplify API to provide personalized recommendations.
     """)
-    
-    # Cost & performance stats (admin info)
-    with st.expander("📊 Performance Metrics"):
-        cost_tracker = get_cost_tracker()
-        stats = cost_tracker.get_stats()
-        st.metric("Total API Cost", stats['total_cost_usd'])
-        st.metric("API Calls", stats['call_count'])
-        st.metric("Avg Cost/Call", stats['avg_cost_per_call'])
     
     st.markdown("---")
     st.caption("📧 Questions? [Contact Library Support](mailto:library@vanderbilt.edu)")
@@ -626,16 +628,15 @@ if (search_button or query) and query.strip():
         
         if results and results['metadatas']:
             
-            # Get API key
-            try:
-                api_key = st.secrets["OPENAI_API_KEY"]
-            except KeyError:
-                st.error("⚠️ OpenAI API key not configured")
-                logger.error("OPENAI_API_KEY not found in secrets")
+            # Get Amplify token
+            amp_token = st.secrets.get("AMPLIFY_TOKEN") or os.getenv("AMPLIFY_TOKEN")
+            if not amp_token:
+                st.error("⚠️ AMPLIFY_TOKEN not found in secrets.toml or environment.")
+                logger.error("AMPLIFY_TOKEN not found in secrets or env")
                 st.stop()
             
             # Generate AI response
-            ai_response, ai_error = generate_ai_response(query, results, api_key)
+            ai_response, ai_error = generate_ai_response(query, results, amp_token)
 
             if ai_response:
                 st.markdown("---")
@@ -710,14 +711,14 @@ if (search_button or query) and query.strip():
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
-    <p>Vanderbilt University Library © 2025</p>
+    <p>Vanderbilt University Library &copy; 2026</p>
     <p>
         <a href='https://library.vanderbilt.edu' target='_blank'>Library Home</a> | 
         <a href='https://researchguides.library.vanderbilt.edu/az/databases' target='_blank'>All Databases A-Z</a> | 
         <a href='mailto:library@vanderbilt.edu'>Contact Support</a>
     </p>
     <p style='font-size: 12px; margin-top: 10px;'>
-        Powered by OpenAI GPT-4o-mini | Data updated weekly
+        Powered by Vanderbilt Amplify | Data updated weekly
     </p>
 </div>
 """, unsafe_allow_html=True)
