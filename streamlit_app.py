@@ -1,12 +1,20 @@
 import streamlit as st
 import pandas as pd
-import chromadb
 from openai import OpenAI, RateLimitError, APIConnectionError
 from datetime import datetime
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Any
 import os
 import glob
 import logging
+
+try:
+    import chromadb
+    CHROMA_AVAILABLE = True
+    CHROMA_IMPORT_ERROR = ""
+except Exception as e:
+    chromadb = None
+    CHROMA_AVAILABLE = False
+    CHROMA_IMPORT_ERROR = str(e)
 
 from config import get_config, validate_config
 from utils import (
@@ -194,8 +202,12 @@ def get_last_update_date() -> str:
 # ============================================
 
 @st.cache_resource
-def init_vector_search(_df: pd.DataFrame) -> Optional[chromadb.Collection]:
+def init_vector_search(_df: pd.DataFrame) -> Optional[Any]:
     """Initialize ChromaDB vector search with database content"""
+    if not CHROMA_AVAILABLE:
+        logger.warning(f"ChromaDB unavailable, using fallback search. Error: {CHROMA_IMPORT_ERROR}")
+        return None
+
     try:
         # Use persistent storage
         client = chromadb.PersistentClient(path=cfg.PERSIST_DIR)
@@ -257,7 +269,8 @@ INFO: {row.get('More_Info', '')}
 
 def search_databases(
     query: str, 
-    collection: chromadb.Collection, 
+    collection: Optional[Any],
+    dataframe: pd.DataFrame,
     num_results: int = None
 ) -> Optional[Dict]:
     """Perform semantic search on database collection"""
@@ -266,11 +279,52 @@ def search_databases(
     
     try:
         log_event("search_started", query=query, num_results=num_results)
-        
-        results = collection.query(
-            query_texts=[query],
-            n_results=num_results
-        )
+
+        # Prefer vector search when available, otherwise use lexical fallback.
+        if collection is not None and CHROMA_AVAILABLE:
+            results = collection.query(
+                query_texts=[query],
+                n_results=num_results
+            )
+        else:
+            q = query.strip()
+            if not q:
+                return {"metadatas": [[]]}
+
+            name_hit = dataframe['Name'].astype(str).str.contains(q, case=False, na=False)
+            subj_hit = dataframe['Subjects'].astype(str).str.contains(q, case=False, na=False)
+            desc_hit = dataframe['Description'].astype(str).str.contains(q, case=False, na=False)
+            alt_hit = dataframe['Alt_Names'].astype(str).str.contains(q, case=False, na=False)
+            info_hit = dataframe['More_Info'].astype(str).str.contains(q, case=False, na=False)
+
+            scored = dataframe.copy()
+            scored['_score'] = (
+                name_hit.astype(int) * 4
+                + subj_hit.astype(int) * 3
+                + desc_hit.astype(int) * 2
+                + alt_hit.astype(int)
+                + info_hit.astype(int)
+            )
+
+            filtered = scored[scored['_score'] > 0].sort_values('_score', ascending=False).head(num_results)
+            if filtered.empty:
+                filtered = scored.head(num_results)
+
+            metas = []
+            for idx, row in filtered.iterrows():
+                metas.append({
+                    'id': str(row.get('ID', idx)),
+                    'name': str(row.get('Name', 'Unknown')),
+                    'url': str(row.get('URL', '')),
+                    'description': str(row.get('Description', 'No description')),
+                    'subjects': str(row.get('Subjects', '')),
+                    'primary_library': str(row.get('Primary_Library', '')),
+                    'alt_names': str(row.get('Alt_Names', '')),
+                    'more_info': str(row.get('More_Info', '')),
+                    'friendly_url': str(row.get('Friendly_URL', ''))
+                })
+
+            results = {"metadatas": [metas]}
         
         log_event(
             "search_completed",
@@ -401,10 +455,8 @@ try:
         st.stop()
     
     collection = init_vector_search(df)
-    
     if collection is None:
-        st.error("❌ Failed to initialize search. Please contact library support.")
-        st.stop()
+        st.warning("⚠️ Semantic search is unavailable in this environment. Using fallback search mode.")
 
 except Exception as e:
     logger.exception(f"Fatal initialization error: {e}")
@@ -551,7 +603,7 @@ if (search_button or query) and query.strip():
     with st.spinner("🔍 Searching databases..."):
         
         # Perform search
-        results = search_databases(query, collection, cfg.SEARCH_TOP_K)
+        results = search_databases(query, collection, df, cfg.SEARCH_TOP_K)
         
         if results and results['metadatas']:
             
