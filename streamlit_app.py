@@ -140,44 +140,54 @@ def load_databases() -> Tuple[pd.DataFrame, Optional[str]]:
             logger.error(error_msg)
             raise FileNotFoundError(error_msg)
         
-        latest_csv = max(csv_files, key=os.path.getctime)
-        logger.info(f"Loading CSV: {latest_csv}")
-        
-        # Load and clean data
-        df = pd.read_csv(latest_csv)
-        df = df.fillna("")
-        
-        # Rename columns mapping (positional)
-        column_mapping = {
-            df.columns[0]: 'ID',
-            df.columns[1]: 'Name',
-            df.columns[2]: 'Description',
-            df.columns[3]: 'URL',
-            df.columns[4]: 'Last_Updated',
-            df.columns[5]: 'Primary_Library',
-            df.columns[6]: 'Alt_Names',
-            df.columns[8]: 'Friendly_URL',
-            df.columns[9]: 'Subjects',
-            df.columns[11]: 'More_Info'
-        }
-        
-        existing_mappings = {k: v for k, v in column_mapping.items() if k in df.columns}
-        df = df.rename(columns=existing_mappings)
-        
-        # Validate
-        validation_result = validate_csv(df)
-        
-        if not validation_result.is_valid:
-            errors_msg = "; ".join(validation_result.errors)
-            logger.error(f"CSV validation failed: {errors_msg}")
-            raise ValueError(f"CSV validation failed: {errors_msg}")
-        
-        if validation_result.warnings:
-            for warning in validation_result.warnings:
-                logger.warning(f"CSV warning: {warning}")
-        
-        log_event("csv_loaded", file=latest_csv, records=len(df))
-        return df, latest_csv
+        # Evaluate candidates and prefer valid full exports over tiny sample files.
+        candidates = sorted(csv_files, key=os.path.getctime, reverse=True)
+        best_df: Optional[pd.DataFrame] = None
+        best_file: Optional[str] = None
+        best_rows = -1
+
+        for candidate in candidates:
+            try:
+                cdf = pd.read_csv(candidate).fillna("")
+
+                # Rename columns mapping (positional) when expected shape is present.
+                if len(cdf.columns) >= 12:
+                    column_mapping = {
+                        cdf.columns[0]: 'ID',
+                        cdf.columns[1]: 'Name',
+                        cdf.columns[2]: 'Description',
+                        cdf.columns[3]: 'URL',
+                        cdf.columns[4]: 'Last_Updated',
+                        cdf.columns[5]: 'Primary_Library',
+                        cdf.columns[6]: 'Alt_Names',
+                        cdf.columns[8]: 'Friendly_URL',
+                        cdf.columns[9]: 'Subjects',
+                        cdf.columns[11]: 'More_Info'
+                    }
+                    existing_mappings = {k: v for k, v in column_mapping.items() if k in cdf.columns}
+                    cdf = cdf.rename(columns=existing_mappings)
+
+                validation_result = validate_csv(cdf)
+                rows = len(cdf)
+
+                if validation_result.is_valid and rows >= cfg.CSV_MIN_ROWS:
+                    logger.info(f"Selected CSV: {candidate} ({rows} rows)")
+                    log_event("csv_loaded", file=candidate, records=rows)
+                    return cdf, candidate
+
+                if validation_result.is_valid and rows > best_rows:
+                    best_rows = rows
+                    best_df = cdf
+                    best_file = candidate
+            except Exception as e:
+                logger.warning(f"Skipping CSV candidate {candidate}: {e}")
+
+        if best_df is not None and best_file is not None:
+            logger.warning(f"Using fallback CSV: {best_file} ({best_rows} rows)")
+            log_event("csv_loaded_fallback", file=best_file, records=best_rows)
+            return best_df, best_file
+
+        raise ValueError("No valid CSV file found after evaluating candidates")
     
     except FileNotFoundError as e:
         logger.error(f"CSV not found: {e}")
@@ -190,10 +200,9 @@ def load_databases() -> Tuple[pd.DataFrame, Optional[str]]:
 def get_last_update_date() -> str:
     """Get timestamp of last database update"""
     try:
-        csv_files = glob.glob(cfg.CSV_GLOB_PATTERN)
-        if csv_files:
-            latest = max(csv_files, key=os.path.getctime)
-            timestamp = os.path.getctime(latest)
+        _, selected_csv = load_databases()
+        if selected_csv:
+            timestamp = os.path.getctime(selected_csv)
             return datetime.fromtimestamp(timestamp).strftime('%B %d, %Y')
         return "Unknown"
     except Exception as e:
@@ -303,7 +312,7 @@ def generate_ai_response(
     query: str, 
     results: Dict, 
     api_key: str
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """Generate AI-powered recommendations using GPT-4o-mini"""
     
     # Check rate limit
@@ -314,7 +323,7 @@ def generate_ai_response(
         if not status.is_allowed:
             error_msg = f"Rate limit exceeded. Reset in {int(status.reset_in_seconds)} seconds."
             logger.warning(f"Rate limit hit: {status.requests_in_window}/{status.max_requests}")
-            return None
+            return None, error_msg
     
     try:
         client = OpenAI(api_key=api_key)
@@ -382,22 +391,22 @@ Format your response as:
             cost_usd=f"${cost.cost_usd:.4f}"
         )
         
-        return response.choices[0].message.content
+        return response.choices[0].message.content, None
     
     except RateLimitError as e:
         error_msg = "OpenAI API rate limit hit. Try again in 60 seconds."
         logger.error(f"Rate limit error: {e}")
-        return None
+        return None, error_msg
     
     except APIConnectionError as e:
         error_msg = "Network error connecting to OpenAI. Check your connection and API key."
         logger.error(f"API connection error: {e}")
-        return None
+        return None, error_msg
     
     except Exception as e:
         logger.exception(f"AI response error: {e}")
         log_event("ai_response_error", query=query, error=str(e))
-        return None
+        return None, f"OpenAI request failed: {str(e)}"
 
 # ============================================
 # LOAD DATA
@@ -573,7 +582,7 @@ if (search_button or query) and query.strip():
                 st.stop()
             
             # Generate AI response
-            ai_response = generate_ai_response(query, results, api_key)
+            ai_response, ai_error = generate_ai_response(query, results, api_key)
             
             if ai_response:
                 st.markdown("---")
@@ -635,7 +644,10 @@ if (search_button or query) and query.strip():
                         st.warning("We'll work on improving results!")
             
             else:
-                st.error("Unable to generate recommendations. Please try again.")
+                if ai_error:
+                    st.error(ai_error)
+                else:
+                    st.error("Unable to generate recommendations. Please try again.")
         
         else:
             st.warning("No results found. Please try a different search term.")
