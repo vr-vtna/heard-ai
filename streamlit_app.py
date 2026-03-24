@@ -239,18 +239,31 @@ def init_vector_search(_df: pd.DataFrame) -> Optional[Any]:
     try:
         # Use persistent storage
         client = chromadb.PersistentClient(path=cfg.PERSIST_DIR)
-        
-        # Delete old collection if exists
+
+        # Reuse existing collection when it already has all documents indexed.
+        # On Streamlit Cloud, chroma_data/ persists across server restarts, so
+        # skipping re-indexing dramatically reduces cold-start time.
+        expected_count = len(_df)
+        try:
+            collection = client.get_collection("vanderbilt_databases")
+            if collection.count() == expected_count:
+                logger.info(f"ChromaDB: reusing existing collection ({expected_count} docs)")
+                log_event("vector_search_reused", database_count=expected_count)
+                return collection
+        except Exception:
+            pass
+
+        # Collection missing or stale — rebuild it.
         try:
             client.delete_collection("vanderbilt_databases")
         except Exception:
             pass
-        
+
         collection = client.create_collection(
             name="vanderbilt_databases",
             metadata={"description": "Vanderbilt Database A-Z List"}
         )
-        
+
         # Build batch lists — single collection.add() is dramatically faster than
         # 890 individual calls (one model inference pass vs. 890 separate passes)
         all_documents: list = []
