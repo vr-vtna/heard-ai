@@ -251,22 +251,35 @@ def init_vector_search(_df: pd.DataFrame) -> Optional[Any]:
             metadata={"description": "Vanderbilt Database A-Z List"}
         )
         
-        # Index all databases
+        # Build batch lists — single collection.add() is dramatically faster than
+        # 890 individual calls (one model inference pass vs. 890 separate passes)
+        all_documents: list = []
+        all_metadatas: list = []
+        all_ids: list = []
+        seen_ids: set = set()
+
         for idx, row in _df.iterrows():
-            # Create rich search text with weighted fields
-            search_text = f"""
-NAME: {row.get('Name', '')}
-NAME: {row.get('Name', '')}
-DESCRIPTION: {row.get('Description', '')}
-SUBJECTS: {row.get('Subjects', '')}
-KEYWORDS: {row.get('Alt_Names', '')}
-LIBRARY: {row.get('Primary_Library', '')}
-INFO: {row.get('More_Info', '')}
-"""
-            
-            # Prepare metadata
+            raw_id = str(row.get('ID', idx))
+            # Deduplicate IDs — ChromaDB errors on duplicates
+            unique_id = raw_id
+            suffix = 1
+            while unique_id in seen_ids:
+                unique_id = f"{raw_id}_{suffix}"
+                suffix += 1
+            seen_ids.add(unique_id)
+
+            search_text = (
+                f"NAME: {row.get('Name', '')}\n"
+                f"NAME: {row.get('Name', '')}\n"
+                f"DESCRIPTION: {row.get('Description', '')}\n"
+                f"SUBJECTS: {row.get('Subjects', '')}\n"
+                f"KEYWORDS: {row.get('Alt_Names', '')}\n"
+                f"LIBRARY: {row.get('Primary_Library', '')}\n"
+                f"INFO: {row.get('More_Info', '')}\n"
+            )
+
             metadata = {
-                'id': str(row.get('ID', idx)),
+                'id': raw_id,
                 'name': str(row.get('Name', 'Unknown'))[:500],
                 'url': str(row.get('URL', '')),
                 'description': str(row.get('Description', 'No description'))[:1000],
@@ -276,12 +289,17 @@ INFO: {row.get('More_Info', '')}
                 'more_info': str(row.get('More_Info', ''))[:500],
                 'friendly_url': str(row.get('Friendly_URL', ''))
             }
-            
-            collection.add(
-                documents=[search_text],
-                metadatas=[metadata],
-                ids=[str(row.get('ID', idx))]
-            )
+
+            all_documents.append(search_text)
+            all_metadatas.append(metadata)
+            all_ids.append(unique_id)
+
+        # Single batch add — one embedding model pass for all documents
+        collection.add(
+            documents=all_documents,
+            metadatas=all_metadatas,
+            ids=all_ids
+        )
         
         logger.info(f"ChromaDB indexed {len(_df)} databases")
         log_event("vector_search_initialized", database_count=len(_df))
