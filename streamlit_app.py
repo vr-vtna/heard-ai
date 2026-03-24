@@ -128,19 +128,55 @@ if 'negative_feedback' not in st.session_state:
 # DATA LOADING & VALIDATION
 # ============================================
 
+def normalize_database_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize varying Vanderbilt export schemas into canonical column names."""
+    normalized = df.copy()
+    normalized.columns = [str(c).strip() for c in normalized.columns]
+
+    # Prefer explicit header names from full export files.
+    explicit_mapping = {
+        "Alt. Names / Keywords": "Alt_Names",
+        "Friendly URL": "Friendly_URL",
+        "More Info": "More_Info",
+        "Primary Library": "Primary_Library",
+        "Last Updated": "Last_Updated",
+    }
+    normalized = normalized.rename(columns={k: v for k, v in explicit_mapping.items() if k in normalized.columns})
+
+    # Positional fallback for older 12-column exports.
+    if len(normalized.columns) >= 12:
+        positional_targets = {
+            0: "ID",
+            1: "Name",
+            2: "Description",
+            3: "URL",
+            4: "Last_Updated",
+            5: "Primary_Library",
+            6: "Alt_Names",
+            8: "Friendly_URL",
+            10: "Subjects",
+            11: "More_Info",
+        }
+        for idx, target in positional_targets.items():
+            if idx < len(normalized.columns) and target not in normalized.columns:
+                normalized = normalized.rename(columns={normalized.columns[idx]: target})
+
+    # Drop duplicate column names (can happen with mixed explicit+positional mappings).
+    normalized = normalized.loc[:, ~normalized.columns.duplicated()]
+    return normalized
+
+
 @st.cache_data(ttl=cfg.CSV_CACHE_TTL)
 def load_databases() -> Tuple[pd.DataFrame, Optional[str]]:
     """Load and validate the most recent database CSV file"""
     try:
-        # Find timestamped CSV files
         csv_files = glob.glob(cfg.CSV_GLOB_PATTERN)
-        
+
         if not csv_files:
             error_msg = f"No database CSV found in {cfg.CSV_GLOB_PATTERN}"
             logger.error(error_msg)
             raise FileNotFoundError(error_msg)
-        
-        # Evaluate candidates and prefer valid full exports over tiny sample files.
+
         candidates = sorted(csv_files, key=os.path.getctime, reverse=True)
         best_df: Optional[pd.DataFrame] = None
         best_file: Optional[str] = None
@@ -149,23 +185,7 @@ def load_databases() -> Tuple[pd.DataFrame, Optional[str]]:
         for candidate in candidates:
             try:
                 cdf = pd.read_csv(candidate).fillna("")
-
-                # Rename columns mapping (positional) when expected shape is present.
-                if len(cdf.columns) >= 12:
-                    column_mapping = {
-                        cdf.columns[0]: 'ID',
-                        cdf.columns[1]: 'Name',
-                        cdf.columns[2]: 'Description',
-                        cdf.columns[3]: 'URL',
-                        cdf.columns[4]: 'Last_Updated',
-                        cdf.columns[5]: 'Primary_Library',
-                        cdf.columns[6]: 'Alt_Names',
-                        cdf.columns[8]: 'Friendly_URL',
-                        cdf.columns[9]: 'Subjects',
-                        cdf.columns[11]: 'More_Info'
-                    }
-                    existing_mappings = {k: v for k, v in column_mapping.items() if k in cdf.columns}
-                    cdf = cdf.rename(columns=existing_mappings)
+                cdf = normalize_database_columns(cdf)
 
                 validation_result = validate_csv(cdf)
                 rows = len(cdf)
@@ -188,7 +208,7 @@ def load_databases() -> Tuple[pd.DataFrame, Optional[str]]:
             return best_df, best_file
 
         raise ValueError("No valid CSV file found after evaluating candidates")
-    
+
     except FileNotFoundError as e:
         logger.error(f"CSV not found: {e}")
         raise
@@ -394,9 +414,11 @@ Format your response as:
         return response.choices[0].message.content, None
     
     except RateLimitError as e:
-        error_msg = "OpenAI API rate limit hit. Try again in 60 seconds."
         logger.error(f"Rate limit error: {e}")
-        return None, error_msg
+        detail = str(e).strip()
+        if detail:
+            return None, f"OpenAI API rate limit hit: {detail}"
+        return None, "OpenAI API rate limit hit. Try again in 60 seconds."
     
     except APIConnectionError as e:
         error_msg = "Network error connecting to OpenAI. Check your connection and API key."
@@ -583,71 +605,69 @@ if (search_button or query) and query.strip():
             
             # Generate AI response
             ai_response, ai_error = generate_ai_response(query, results, api_key)
-            
+
             if ai_response:
                 st.markdown("---")
                 st.markdown("## 🎯 Recommendations")
                 st.markdown(ai_response)
-                
-                # Display detailed database cards
-                st.markdown("---")
-                st.markdown("## 📚 Database Details")
-                
-                for i, meta in enumerate(results['metadatas'][0]):
-                    with st.expander(f"**{i+1}. {meta['name']}**", expanded=(i==0)):
-                        
-                        col1, col2 = st.columns([3, 1])
-                        
-                        with col1:
-                            st.markdown(f"**📖 Description:**")
-                            st.write(meta['description'])
-                            
-                            if meta['subjects']:
-                                st.markdown(f"**🏷️ Subjects:** {meta['subjects']}")
-                            
-                            if meta['primary_library']:
-                                st.markdown(f"**🏛️ Primary Library:** {meta['primary_library']}")
-                            
-                            if meta['alt_names']:
-                                st.caption(f"_Also known as: {meta['alt_names']}_")
-                        
-                        with col2:
-                            full_url = meta['url']
-                            if meta['friendly_url']:
-                                full_url = f"https://researchguides.library.vanderbilt.edu/{meta['friendly_url']}"
-                            
-                            st.markdown(f"### [🔗 Access Database]({full_url})")
-                            
-                            if meta['more_info'] and len(meta['more_info']) > 10:
-                                st.info(f"ℹ️ {meta['more_info'][:200]}")
-                
-                # Feedback section
-                st.markdown("---")
-                st.markdown("### 💬 Was this helpful?")
-                col1, col2, col3 = st.columns([1, 1, 4])
-                with col1:
-                    if st.button("👍 Yes", use_container_width=True):
-                        st.session_state.positive_feedback.append({
-                            'query': query,
-                            'timestamp': datetime.now().isoformat()
-                        })
-                        log_event("feedback_positive", query=query)
-                        st.success("Thank you for your feedback!")
-                
-                with col2:
-                    if st.button("👎 No", use_container_width=True):
-                        st.session_state.negative_feedback.append({
-                            'query': query,
-                            'timestamp': datetime.now().isoformat()
-                        })
-                        log_event("feedback_negative", query=query)
-                        st.warning("We'll work on improving results!")
-            
             else:
                 if ai_error:
-                    st.error(ai_error)
-                else:
-                    st.error("Unable to generate recommendations. Please try again.")
+                    st.warning(ai_error)
+                st.info("Showing top semantic matches while AI text generation is unavailable.")
+
+            # Display detailed database cards (always show if search succeeded)
+            st.markdown("---")
+            st.markdown("## 📚 Database Details")
+
+            for i, meta in enumerate(results['metadatas'][0]):
+                with st.expander(f"**{i+1}. {meta['name']}**", expanded=(i==0)):
+
+                    col1, col2 = st.columns([3, 1])
+
+                    with col1:
+                        st.markdown(f"**📖 Description:**")
+                        st.write(meta['description'])
+
+                        if meta['subjects']:
+                            st.markdown(f"**🏷️ Subjects:** {meta['subjects']}")
+
+                        if meta['primary_library']:
+                            st.markdown(f"**🏛️ Primary Library:** {meta['primary_library']}")
+
+                        if meta['alt_names']:
+                            st.caption(f"_Also known as: {meta['alt_names']}_")
+
+                    with col2:
+                        full_url = meta['url']
+                        if meta['friendly_url']:
+                            full_url = f"https://researchguides.library.vanderbilt.edu/{meta['friendly_url']}"
+
+                        st.markdown(f"### [🔗 Access Database]({full_url})")
+
+                        if meta['more_info'] and len(meta['more_info']) > 10:
+                            st.info(f"ℹ️ {meta['more_info'][:200]}")
+
+            # Feedback section
+            st.markdown("---")
+            st.markdown("### 💬 Was this helpful?")
+            col1, col2, col3 = st.columns([1, 1, 4])
+            with col1:
+                if st.button("👍 Yes", use_container_width=True):
+                    st.session_state.positive_feedback.append({
+                        'query': query,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    log_event("feedback_positive", query=query)
+                    st.success("Thank you for your feedback!")
+
+            with col2:
+                if st.button("👎 No", use_container_width=True):
+                    st.session_state.negative_feedback.append({
+                        'query': query,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    log_event("feedback_negative", query=query)
+                    st.warning("We'll work on improving results!")
         
         else:
             st.warning("No results found. Please try a different search term.")
