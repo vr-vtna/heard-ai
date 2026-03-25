@@ -5,7 +5,7 @@ AI-powered chatbot to help users discover relevant databases from Vanderbilt Uni
 ## Features
 
 - 🔍 **Semantic Search**: Intelligent database discovery across 500+ resources using ChromaDB
-- 🤖 **GPT-4 Powered Recommendations**: AI-generated personalized database suggestions
+- 🤖 **AI-Powered Recommendations**: Personalized database suggestions via Vanderbilt Amplify API
 - 📊 **Subject Filtering**: Browse and filter databases by academic discipline
 - 🔄 **Weekly Automatic Data Refresh**: GitHub Actions-scheduled database updates
 - 📱 **Mobile-Responsive Design**: Works seamlessly on desktop and mobile devices
@@ -17,7 +17,7 @@ AI-powered chatbot to help users discover relevant databases from Vanderbilt Uni
 ### Prerequisites
 
 - Python 3.8+
-- OpenAI API key
+- Vanderbilt Amplify API token
 - Git
 
 ### 1. Install Dependencies
@@ -31,12 +31,12 @@ pip install -r requirements.txt
 Create `.streamlit/secrets.toml`:
 
 ```toml
-OPENAI_API_KEY = "sk-your-openai-api-key-here"
+AMPLIFY_TOKEN = "your-amplify-token-here"
 ```
 
 Alternatively, set as environment variable:
 ```bash
-export OPENAI_API_KEY="sk-..."
+export AMPLIFY_TOKEN="your-amplify-token"
 ```
 
 ### 3. Run the App
@@ -111,7 +111,7 @@ Older CSV files (> 4 weeks) are automatically cleaned up.
 - **Search**: Semantic similarity queries across rich metadata
 
 ### AI Component
-- **Model**: OpenAI GPT-4o-mini (cost-optimized)
+- **Model**: GPT-4o-mini via Vanderbilt Amplify API
 - **Prompting**: Strict guidelines to prevent hallucination
 - **Context**: Top 5 semantic match results with full metadata
 
@@ -127,7 +127,7 @@ Older CSV files (> 4 weeks) are automatically cleaned up.
 | `load_databases()` | Load and standardize CSV data with caching |
 | `init_vector_search()` | Initialize ChromaDB collection with database metadata |
 | `search_databases()` | Execute semantic search queries |
-| `generate_ai_response()` | Create personalized GPT-4 recommendations |
+| `generate_ai_response()` | Create personalized recommendations via Amplify API |
 
 ## Configuration
 
@@ -138,7 +138,7 @@ Older CSV files (> 4 weeks) are automatically cleaned up.
 - Headless mode for production
 
 ### Environment Variables
-- `OPENAI_API_KEY` — **Required** for GPT-4o-mini API access
+- `AMPLIFY_TOKEN` — **Required** for Vanderbilt Amplify API access
 - `CSV_SOURCE_URL` — Optional URL for remote database exports
 
 ## Deployment
@@ -147,12 +147,12 @@ Older CSV files (> 4 weeks) are automatically cleaned up.
 1. Push repo to GitHub
 2. Create new app at [streamlit.io/cloud](https://streamlit.io/cloud)
 3. Configure repository and branch
-4. Add `OPENAI_API_KEY` in Secrets
+4. Add `AMPLIFY_TOKEN` in Secrets
 
 ### Docker
 ```bash
 docker build -t heard-ai .
-docker run -p 8501:8501 -e OPENAI_API_KEY="your-key" heard-ai
+docker run -p 8501:8501 -e AMPLIFY_TOKEN="your-token" heard-ai
 ```
 
 ### GitHub Pages / Custom Server
@@ -160,8 +160,8 @@ See `.github/workflows/refresh_database.yml` for CI/CD automation.
 
 ## Limitations & Considerations
 
-- **Embedding Model**: ChromaDB uses OpenAI embeddings (constrained to 8,191 tokens)
-- **Rate Limiting**: OpenAI API rate limits may apply during high traffic
+- **Embedding Model**: ChromaDB uses built-in Onnx embeddings (no external API key needed)
+- **Rate Limiting**: Amplify API rate limits may apply during high traffic
 - **CSV Format**: Strict column ordering required; run validation before deployment
 - **Cache TTL**: Database CSV cached for 1 hour; modify `@st.cache_data(ttl=3600)` as needed
 
@@ -208,7 +208,7 @@ export CSV_CACHE_TTL=7200                 # Cache timeout in seconds (default: 3
 
 # Observability
 export LOG_LEVEL=DEBUG                    # Logging verbosity (default: INFO)
-export TRACK_API_COSTS=true               # Track OpenAI spending (default: true)
+export TRACK_API_COSTS=true               # Track API spending (default: false)
 export RATE_LIMIT_ENABLED=true            # Enable rate limiting (default: true)
 
 # Example: Development mode
@@ -249,7 +249,7 @@ for i in range(15):
 ### Production Checklist
 
 - [ ] Run `pytest tests/ -v` (all pass)
-- [ ] Set `OPENAI_API_KEY` environment variable
+- [ ] Set `AMPLIFY_TOKEN` environment variable
 - [ ] Verify CSV in `data/` directory
 - [ ] Set `LOG_LEVEL=INFO` (production)
 - [ ] Set `RATE_LIMIT_PER_MINUTE=5` (production)

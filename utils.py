@@ -30,6 +30,10 @@ def setup_logging() -> logging.Logger:
     logger = logging.getLogger("heard-ai")
     logger.setLevel(cfg.LOG_LEVEL)
     
+    # Avoid duplicate handlers on repeated imports / Streamlit reruns
+    if logger.handlers:
+        return logger
+    
     # File handler
     file_handler = logging.FileHandler(log_dir / cfg.LOG_FILE)
     file_handler.setLevel(cfg.LOG_LEVEL)
@@ -135,7 +139,7 @@ def validate_csv(df: pd.DataFrame) -> ValidationResult:
     metrics['missing_descriptions'] = df['Description'].isna().sum() if 'Description' in df.columns else 0
     
     if 'Subjects' in df.columns:
-        metrics['unique_subjects'] = df['Subjects'].str.split(',').explode().nunique()
+        metrics['unique_subjects'] = df['Subjects'].str.split(r'[,;]', regex=True).explode().str.strip().nunique()
     
     if 'Last_Updated' in df.columns:
         metrics['oldest_update'] = str(df['Last_Updated'].min())
@@ -235,7 +239,7 @@ def calculate_data_quality(df: pd.DataFrame) -> Dict[str, Any]:
     
     # Subject coverage
     if 'Subjects' in df.columns:
-        all_subjects = df['Subjects'].str.split(',', expand=True).stack().str.strip().unique()
+        all_subjects = df['Subjects'].str.split(r'[,;]', regex=True).explode().str.strip().unique()
         metrics["coverage"]["unique_subjects"] = len(all_subjects)
     
     # Primary library coverage

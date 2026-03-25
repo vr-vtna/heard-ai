@@ -178,6 +178,7 @@ class TestIntegration:
             'Friendly_URL': [''] * (cfg.CSV_MIN_ROWS + 10),
             'Unused1': [''] * (cfg.CSV_MIN_ROWS + 10),
             'Unused2': [''] * (cfg.CSV_MIN_ROWS + 10),
+            'More_Info': [''] * (cfg.CSV_MIN_ROWS + 10),
         })
         
         result = validate_csv(df)

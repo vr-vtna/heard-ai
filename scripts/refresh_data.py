@@ -36,7 +36,7 @@ def refresh_database():
         else:
             # Method 2: Copy existing file with new timestamp
             timestamp = datetime.now().strftime('%Y%m%d')
-            source = 'az_database_list_export_2026_02_24_cleaned.csv'
+            source = 'data/az_database_list_export_2026_02_24_cleaned.csv'
             dest = f'data/az_database_list_{timestamp}.csv'
             
             import shutil

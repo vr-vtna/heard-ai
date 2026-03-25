@@ -175,7 +175,7 @@ def load_databases() -> Tuple[pd.DataFrame, Optional[str]]:
             logger.error(error_msg)
             raise FileNotFoundError(error_msg)
 
-        candidates = sorted(csv_files, key=os.path.getctime, reverse=True)
+        candidates = sorted(csv_files, key=os.path.getmtime, reverse=True)
         best_df: Optional[pd.DataFrame] = None
         best_file: Optional[str] = None
         best_rows = -1
@@ -220,7 +220,7 @@ def get_last_update_date() -> str:
     try:
         _, selected_csv = load_databases()
         if selected_csv:
-            timestamp = os.path.getctime(selected_csv)
+            timestamp = os.path.getmtime(selected_csv)
             return datetime.fromtimestamp(timestamp).strftime('%B %d, %Y')
         return "Unknown"
     except Exception as e:
@@ -531,7 +531,7 @@ with st.sidebar:
         """, unsafe_allow_html=True)
     
     with col2:
-        unique_subjects = len(df['Subjects'].str.split(',').explode().str.strip().unique())
+        unique_subjects = len(df['Subjects'].str.split(r'[,;]', regex=True).explode().str.strip().unique())
         st.markdown(f"""
         <div class='metric-card'>
             <h2>{unique_subjects}</h2>
@@ -543,7 +543,7 @@ with st.sidebar:
     
     # Subject filter
     st.markdown("### 🔍 Filter by Subject")
-    all_subjects = df['Subjects'].str.split(',').explode().str.strip().unique()
+    all_subjects = df['Subjects'].str.split(r'[,;]', regex=True).explode().str.strip().unique()
     all_subjects = sorted([s for s in all_subjects if s and s != 'nan'])
     
     selected_subjects = st.multiselect(
@@ -714,7 +714,7 @@ st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
     <p>Vanderbilt University Library &copy; 2026</p>
     <p>
-        <a href='https://library.vanderbilt.edu' target='_blank'>Library Home</a> | 
+        <a href='https://www.library.vanderbilt.edu/' target='_blank'>Library Home</a> | 
         <a href='https://researchguides.library.vanderbilt.edu/az/databases' target='_blank'>All Databases A-Z</a> | 
         <a href='mailto:library@vanderbilt.edu'>Contact Support</a>
     </p>
