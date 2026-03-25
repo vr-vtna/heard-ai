@@ -121,6 +121,14 @@ if 'positive_feedback' not in st.session_state:
     st.session_state.positive_feedback = []
 if 'negative_feedback' not in st.session_state:
     st.session_state.negative_feedback = []
+if 'last_results' not in st.session_state:
+    st.session_state.last_results = None
+if 'last_ai_response' not in st.session_state:
+    st.session_state.last_ai_response = None
+if 'last_ai_error' not in st.session_state:
+    st.session_state.last_ai_error = None
+if 'last_query' not in st.session_state:
+    st.session_state.last_query = None
 
 # ============================================
 # DATA LOADING & VALIDATION
@@ -616,6 +624,10 @@ with col2:
     clear_button = st.button("Clear", use_container_width=True)
     if clear_button:
         st.session_state.query = ""
+        st.session_state.last_results = None
+        st.session_state.last_ai_response = None
+        st.session_state.last_ai_error = None
+        st.session_state.last_query = None
         st.rerun()
 
 # ============================================
@@ -652,7 +664,6 @@ if search_button and query.strip():
             }
         
         if results and results['metadatas'] and results['metadatas'][0]:
-            
             # Get Amplify token
             amp_token = st.secrets.get("AMPLIFY_TOKEN") or os.getenv("AMPLIFY_TOKEN")
             if not amp_token:
@@ -663,71 +674,91 @@ if search_button and query.strip():
             # Generate AI response
             ai_response, ai_error = generate_ai_response(query, results, amp_token)
 
-            if ai_response:
-                st.markdown("---")
-                st.markdown("## 🎯 Recommendations")
-                st.markdown(ai_response)
-            else:
-                if ai_error:
-                    st.warning(ai_error)
-                st.info("Showing top semantic matches while AI text generation is unavailable.")
+            # Store results in session state so they persist across reruns
+            st.session_state.last_results = results
+            st.session_state.last_ai_response = ai_response
+            st.session_state.last_ai_error = ai_error
+            st.session_state.last_query = query
+        else:
+            st.session_state.last_results = None
+            st.session_state.last_ai_response = None
+            st.session_state.last_ai_error = None
+            st.session_state.last_query = query
 
-            # Display detailed database cards (always show if search succeeded)
-            st.markdown("---")
-            st.markdown("## 📚 Database Details")
+# Display persisted results
+if st.session_state.last_query and st.session_state.last_results:
+    results = st.session_state.last_results
+    ai_response = st.session_state.last_ai_response
+    ai_error = st.session_state.last_ai_error
 
-            for i, meta in enumerate(results['metadatas'][0]):
-                with st.expander(f"**{i+1}. {meta['name']}**", expanded=(i==0)):
+    if ai_response:
+        st.markdown("---")
+        st.markdown("## 🎯 Recommendations")
+        st.markdown(ai_response)
+    else:
+        if ai_error:
+            st.warning(ai_error)
+        st.info("Showing top semantic matches while AI text generation is unavailable.")
 
-                    col1, col2 = st.columns([3, 1])
+    # Result count
+    num_shown = len(results['metadatas'][0])
+    st.markdown("---")
+    st.markdown(f"## 📚 Database Details")
+    st.caption(f"Showing {num_shown} of {len(df)} databases")
 
-                    with col1:
-                        st.markdown(f"**📖 Description:**")
-                        st.write(meta['description'])
+    for i, meta in enumerate(results['metadatas'][0]):
+        with st.expander(f"**{i+1}. {meta['name']}**", expanded=(i==0)):
 
-                        if meta['subjects']:
-                            st.markdown(f"**🏷️ Subjects:** {meta['subjects']}")
+            col1, col2 = st.columns([3, 1])
 
-                        if meta['primary_library']:
-                            st.markdown(f"**🏛️ Primary Library:** {meta['primary_library']}")
-
-                        if meta['alt_names']:
-                            st.caption(f"_Also known as: {meta['alt_names']}_")
-
-                    with col2:
-                        full_url = meta['url']
-                        if meta['friendly_url']:
-                            full_url = f"https://researchguides.library.vanderbilt.edu/{meta['friendly_url']}"
-
-                        st.markdown(f"### [🔗 Access Database]({full_url})")
-
-                        if meta['more_info'] and len(meta['more_info']) > 10:
-                            st.info(f"ℹ️ {meta['more_info'][:200]}")
-
-            # Feedback section
-            st.markdown("---")
-            st.markdown("### 💬 Was this helpful?")
-            col1, col2, col3 = st.columns([1, 1, 4])
             with col1:
-                if st.button("👍 Yes", use_container_width=True):
-                    st.session_state.positive_feedback.append({
-                        'query': query,
-                        'timestamp': datetime.now().isoformat()
-                    })
-                    log_event("feedback_positive", query=query)
-                    st.success("Thank you for your feedback!")
+                st.markdown(f"**📖 Description:**")
+                st.write(meta['description'])
+
+                if meta['subjects']:
+                    st.markdown(f"**🏷️ Subjects:** {meta['subjects']}")
+
+                if meta['primary_library']:
+                    st.markdown(f"**🏛️ Primary Library:** {meta['primary_library']}")
+
+                if meta['alt_names']:
+                    st.caption(f"_Also known as: {meta['alt_names']}_")
 
             with col2:
-                if st.button("👎 No", use_container_width=True):
-                    st.session_state.negative_feedback.append({
-                        'query': query,
-                        'timestamp': datetime.now().isoformat()
-                    })
-                    log_event("feedback_negative", query=query)
-                    st.warning("We'll work on improving results!")
-        
-        else:
-            st.warning("No results found. Please try a different search term.")
+                full_url = meta['url']
+                if meta['friendly_url']:
+                    full_url = f"https://researchguides.library.vanderbilt.edu/{meta['friendly_url']}"
+
+                st.markdown(f"### [🔗 Access Database]({full_url})")
+
+                if meta['more_info'] and len(meta['more_info']) > 10:
+                    st.info(f"ℹ️ {meta['more_info'][:200]}")
+
+    # Feedback section
+    st.markdown("---")
+    st.markdown("### 💬 Was this helpful?")
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("👍 Yes", use_container_width=True):
+            st.session_state.positive_feedback.append({
+                'query': st.session_state.last_query,
+                'timestamp': datetime.now().isoformat()
+            })
+            log_event("feedback_positive", query=st.session_state.last_query)
+            st.success("Thank you for your feedback!")
+
+    with col2:
+        if st.button("👎 No", use_container_width=True):
+            st.session_state.negative_feedback.append({
+                'query': st.session_state.last_query,
+                'timestamp': datetime.now().isoformat()
+            })
+            log_event("feedback_negative", query=st.session_state.last_query)
+            st.warning("We'll work on improving results!")
+
+elif st.session_state.last_query and not st.session_state.last_results:
+    st.markdown("---")
+    st.info("🔍 No results found for your search. Try a different keyword or [browse all databases](https://researchguides.library.vanderbilt.edu/az/databases).")
 
 # ============================================
 # FOOTER
