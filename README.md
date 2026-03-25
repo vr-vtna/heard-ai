@@ -167,8 +167,6 @@ See `.github/workflows/refresh_database.yml` for CI/CD automation.
 
 ## Support & Maintenance
 
-**Issues or questions?** Contact: [library@vanderbilt.edu](mailto:library@vanderbilt.edu)
-
 **Automated Updates**: Database refreshes every Sunday at 2 AM UTC via GitHub Actions
 
 **Manual Trigger**: Run GitHub Actions workflow manually from the repository's Actions tab
