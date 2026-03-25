@@ -17,6 +17,7 @@ class Config:
 
     # ==================== SEARCH ====================
     SEARCH_TOP_K: int = int(os.getenv("SEARCH_TOP_K", "5"))
+    SEARCH_CANDIDATES: int = int(os.getenv("SEARCH_CANDIDATES", "15"))  # fetch more, let LLM rank
     SEARCH_BATCH_SIZE: int = int(os.getenv("SEARCH_BATCH_SIZE", "100"))
 
     # ==================== AMPLIFY API (new) ====================

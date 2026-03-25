@@ -361,6 +361,61 @@ def search_databases(
         return None
 
 # ============================================
+# QUERY EXPANSION
+# ============================================
+
+def expand_query(query: str, amp_token: str) -> str:
+    """Use the LLM to expand a user query with relevant subject terms for better semantic search.
+    
+    For example, 'Judith Herman' -> 'Judith Herman trauma PTSD psychology psychiatry mental health research'
+    """
+    try:
+        payload = {
+            "data": {
+                "temperature": 0.3,
+                "max_tokens": 150,
+                "dataSources": [],
+                "messages": [
+                    {"role": "system", "content": (
+                        "You are a research librarian. Given a user's search query, expand it with "
+                        "relevant academic subject areas, disciplines, and keywords that would help "
+                        "find the right research databases. If the query is a person's name, identify "
+                        "their field of study and add relevant subject terms. If it's already a topic, "
+                        "add related disciplines and synonyms.\n\n"
+                        "Reply ONLY with the expanded search string — no explanation, no bullet points, "
+                        "no formatting. Keep the original query and add 5-10 relevant terms."
+                    )},
+                    {"role": "user", "content": query}
+                ],
+                "options": {
+                    "ragOnly": False,
+                    "skipRag": True,
+                    "model": {"id": cfg.LLM_MODEL},
+                    "prompt": query
+                }
+            }
+        }
+        headers = {
+            "Authorization": f"Bearer {amp_token}",
+            "Content-Type": "application/json"
+        }
+        resp = requests.post(
+            f"{cfg.AMPLIFY_BASE_URL}/chat",
+            json=payload,
+            headers=headers,
+            timeout=cfg.LLM_TIMEOUT
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        if result.get("success") and result.get("data"):
+            expanded = result["data"].strip()
+            log_event("query_expanded", original=query, expanded=expanded)
+            return expanded
+    except Exception as e:
+        logger.warning(f"Query expansion failed, using original: {e}")
+    return query
+
+# ============================================
 # AI RESPONSE GENERATION
 # ============================================
 
@@ -398,20 +453,25 @@ def generate_ai_response(
         # Strict Vanderbilt Library system prompt
         system_prompt = """You are the Vanderbilt University Library Database Assistant.
 
-Your role is to help students, faculty, and researchers discover the most relevant databases from Vanderbilt's collection.
+Your role is to help students, faculty, and researchers discover the most relevant databases from Vanderbilt's collection for their research needs.
+
+IMPORTANT REASONING STEPS:
+1. First, determine the SUBJECT AREA of the query. If the user mentions a person's name, identify what field(s) that person works in and treat the query as a search for databases in those fields.
+2. From the provided database list, select ONLY those whose subjects, descriptions, or content areas genuinely match the research field.
+3. Do NOT recommend a database just because its name or description contains a superficial keyword match. Focus on subject-matter relevance.
 
 STRICT RULES:
-1. ONLY recommend databases from the provided list
-2. NEVER invent or hallucinate database names
-3. ALWAYS include the exact database name and URL
-4. Explain WHY each database is relevant to the user's query
-5. Mention any access requirements or registration needs
-6. Be concise but helpful (3-4 sentences per database)
-7. Rank recommendations by relevance
+1. ONLY recommend databases from the provided list — never invent names or URLs
+2. ALWAYS include the exact database name and URL as provided
+3. Rank recommendations by subject relevance to the research field, not by keyword overlap
+4. Explain WHY each database is relevant to the research topic
+5. If fewer than 3 databases are truly relevant, recommend only the relevant ones — do not pad with poor matches
+6. Be concise but helpful (2-3 sentences per database)
+7. Mention any access requirements or registration needs
 
 Format your response as:
-1. Brief intro sentence
-2. List of 3-5 recommended databases with explanations
+1. Brief intro identifying the research area
+2. List of recommended databases with explanations
 3. Any additional helpful notes about access or usage"""
 
         log_event("api_call_started", query=query, model=cfg.LLM_MODEL, provider="amplify")
@@ -644,8 +704,18 @@ if search_button and query.strip():
     
     with st.spinner("🔍 Searching databases..."):
         
-        # Perform search
-        results = search_databases(query, collection, cfg.SEARCH_TOP_K)
+        # Get Amplify token early — needed for query expansion and AI response
+        amp_token = st.secrets.get("AMPLIFY_TOKEN") or os.getenv("AMPLIFY_TOKEN")
+        if not amp_token:
+            st.error("⚠️ AMPLIFY_TOKEN not found in secrets.toml or environment.")
+            logger.error("AMPLIFY_TOKEN not found in secrets or env")
+            st.stop()
+
+        # Expand query with subject terms for better semantic search
+        expanded_query = expand_query(query, amp_token)
+
+        # Perform search with more candidates, let LLM rank them
+        results = search_databases(expanded_query, collection, cfg.SEARCH_CANDIDATES)
         
         # Apply subject filter if selected
         if results and results['metadatas'] and selected_subjects:
@@ -664,13 +734,6 @@ if search_button and query.strip():
             }
         
         if results and results['metadatas'] and results['metadatas'][0]:
-            # Get Amplify token
-            amp_token = st.secrets.get("AMPLIFY_TOKEN") or os.getenv("AMPLIFY_TOKEN")
-            if not amp_token:
-                st.error("⚠️ AMPLIFY_TOKEN not found in secrets.toml or environment.")
-                logger.error("AMPLIFY_TOKEN not found in secrets or env")
-                st.stop()
-            
             # Generate AI response
             ai_response, ai_error = generate_ai_response(query, results, amp_token)
 
