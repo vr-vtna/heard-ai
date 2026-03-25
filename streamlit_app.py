@@ -421,7 +421,6 @@ Format your response as:
                     "ragOnly": False,
                     "skipRag": True,
                     "model": {"id": cfg.LLM_MODEL},
-                    "dataSources": []
                 }
             }
         }
