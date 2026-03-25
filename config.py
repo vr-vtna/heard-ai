@@ -21,7 +21,7 @@ class Config:
 
     # ==================== AMPLIFY API (new) ====================
     AMPLIFY_BASE_URL: str = os.getenv("AMPLIFY_BASE_URL", "https://prod-api.vanderbilt.ai")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")   # model id from /available_models
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4.1-mini")   # model id from /available_models
 
     # ==================== LLM SETTINGS ====================
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))

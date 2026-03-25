@@ -27,7 +27,7 @@ class TestConfig:
         """Test default configuration values"""
         cfg = get_config()
         assert cfg.SEARCH_TOP_K == 5
-        assert cfg.LLM_MODEL == "gpt-4o-mini"
+        assert cfg.LLM_MODEL == "gpt-4.1-mini"
         assert cfg.CSV_MIN_ROWS == 100
     
     def test_config_validation_passes(self):
