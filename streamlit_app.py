@@ -622,7 +622,7 @@ with col2:
 # SEARCH RESULTS
 # ============================================
 
-if (search_button or query) and query.strip():
+if search_button and query.strip():
     
     # Add to search history
     if query not in st.session_state.search_history:
@@ -635,7 +635,23 @@ if (search_button or query) and query.strip():
         # Perform search
         results = search_databases(query, collection, cfg.SEARCH_TOP_K)
         
-        if results and results['metadatas']:
+        # Apply subject filter if selected
+        if results and results['metadatas'] and selected_subjects:
+            filtered_indices = [
+                i for i, meta in enumerate(results['metadatas'][0])
+                if any(
+                    subj.strip() in selected_subjects
+                    for subj in str(meta.get('subjects', '')).split(',')
+                )
+            ]
+            results = {
+                'metadatas': [[results['metadatas'][0][i] for i in filtered_indices]],
+                'documents': [[results['documents'][0][i] for i in filtered_indices]] if results.get('documents') else results.get('documents'),
+                'distances': [[results['distances'][0][i] for i in filtered_indices]] if results.get('distances') else results.get('distances'),
+                'ids': [[results['ids'][0][i] for i in filtered_indices]] if results.get('ids') else results.get('ids'),
+            }
+        
+        if results and results['metadatas'] and results['metadatas'][0]:
             
             # Get Amplify token
             amp_token = st.secrets.get("AMPLIFY_TOKEN") or os.getenv("AMPLIFY_TOKEN")
