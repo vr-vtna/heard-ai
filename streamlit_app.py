@@ -440,9 +440,15 @@ def generate_ai_response(
         # Format context from search results
         context_parts = []
         for i, meta in enumerate(results['metadatas'][0], 1):
+            # Only use Friendly URL
+            if meta.get('friendly_url') and meta['friendly_url'] not in ('', 'nan'):
+                display_url = f"https://researchguides.library.vanderbilt.edu/{meta['friendly_url']}"
+                url_line = f"   URL: {display_url}"
+            else:
+                url_line = ""
             context_parts.append(f"""
 {i}. **{meta['name']}**
-   URL: {meta['url']}
+{url_line}
    Description: {meta['description'][:300]}...
    Subjects: {meta['subjects']}
    Primary Library: {meta['primary_library']}
@@ -462,7 +468,7 @@ IMPORTANT REASONING STEPS:
 
 STRICT RULES:
 1. ONLY recommend databases from the provided list — never invent names or URLs
-2. ALWAYS include the exact database name and URL as provided
+2. ALWAYS include the exact database name and URL exactly as provided — do not modify or reconstruct URLs
 3. Rank recommendations by subject relevance to the research field, not by keyword overlap
 4. Explain WHY each database is relevant to the research topic
 5. If fewer than 3 databases are truly relevant, recommend only the relevant ones — do not pad with poor matches
@@ -788,11 +794,9 @@ if st.session_state.last_query and st.session_state.last_results:
                     st.caption(f"_Also known as: {meta['alt_names']}_")
 
             with col2:
-                full_url = meta['url']
-                if meta['friendly_url']:
+                if meta.get('friendly_url') and meta['friendly_url'] not in ('', 'nan'):
                     full_url = f"https://researchguides.library.vanderbilt.edu/{meta['friendly_url']}"
-
-                st.markdown(f"### [🔗 Access Database]({full_url})")
+                    st.markdown(f"### [🔗 Access Database]({full_url})")
 
                 if meta['more_info'] and len(meta['more_info']) > 10:
                     st.info(f"ℹ️ {meta['more_info'][:200]}")
