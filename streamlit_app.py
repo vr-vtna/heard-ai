@@ -420,7 +420,8 @@ Format your response as:
                 "options": {
                     "ragOnly": False,
                     "skipRag": True,
-                    "model": {"id": cfg.LLM_MODEL}
+                    "model": {"id": cfg.LLM_MODEL},
+                    "dataSources": []
                 }
             }
         }
