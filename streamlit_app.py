@@ -418,7 +418,12 @@ Format your response as:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Research Query: {query}\n\nAvailable Databases:\n{context}\n\nProvide relevant database recommendations:"}
                 ],
-                "dataSources": []
+                "options": {
+                    "ragOnly": False,
+                    "skipRag": True,
+                    "model": {"id": cfg.LLM_MODEL},
+                    "dataSources": []
+                }
             }
         }
 
