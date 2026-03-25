@@ -26,7 +26,7 @@ class Config:
     # ==================== LLM SETTINGS ====================
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "800"))
-    LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "30"))
+    LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "60"))
 
     # ==================== RATE LIMITING ====================
     RATE_LIMIT_PER_MINUTE: int = int(os.getenv("RATE_LIMIT_PER_MINUTE", "10"))

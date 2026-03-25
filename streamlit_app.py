@@ -410,14 +410,16 @@ Format your response as:
 
         # Amplify /chat payload
         payload = {
-            "model": cfg.LLM_MODEL,
-            "temperature": cfg.LLM_TEMPERATURE,
-            "max_tokens": cfg.LLM_MAX_TOKENS,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Research Query: {query}\n\nAvailable Databases:\n{context}\n\nProvide relevant database recommendations:"}
-            ],
-            "dataSources": []
+            "data": {
+                "model": cfg.LLM_MODEL,
+                "temperature": cfg.LLM_TEMPERATURE,
+                "max_tokens": cfg.LLM_MAX_TOKENS,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Research Query: {query}\n\nAvailable Databases:\n{context}\n\nProvide relevant database recommendations:"}
+                ],
+                "dataSources": []
+            }
         }
 
         headers = {
@@ -444,12 +446,18 @@ Format your response as:
             return None, f"Amplify API error: {error_msg}"
 
     except requests.exceptions.HTTPError as e:
+        body = ""
+        try:
+            body = e.response.text[:500]
+        except Exception:
+            pass
+        logger.error(f"Amplify HTTP {e.response.status_code}: {body}")
         if e.response.status_code == 401:
             return None, "❌ Invalid Amplify token (401). Check AMPLIFY_TOKEN in secrets."
         elif e.response.status_code == 400:
-            return None, "❌ Bad request to Amplify (400). Check payload / model id."
+            return None, f"❌ Bad request to Amplify (400): {body}"
         else:
-            return None, f"HTTP {e.response.status_code} error from Amplify."
+            return None, f"HTTP {e.response.status_code} error from Amplify: {body}"
     
     except requests.exceptions.RequestException as e:
         logger.error(f"Network error to Amplify: {e}")
