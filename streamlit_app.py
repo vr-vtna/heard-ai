@@ -408,21 +408,16 @@ Format your response as:
 
         log_event("api_call_started", query=query, model=cfg.LLM_MODEL, provider="amplify")
 
-        # Amplify /chat payload (matches official docs)
+        # Amplify /chat payload
         payload = {
-            "data": {
-                "temperature": cfg.LLM_TEMPERATURE,
-                "max_tokens": cfg.LLM_MAX_TOKENS,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Research Query: {query}\n\nAvailable Databases:\n{context}\n\nProvide relevant database recommendations:"}
-                ],
-                "options": {
-                    "ragOnly": False,
-                    "skipRag": True,
-                    "model": {"id": cfg.LLM_MODEL},
-                }
-            }
+            "model": cfg.LLM_MODEL,
+            "temperature": cfg.LLM_TEMPERATURE,
+            "max_tokens": cfg.LLM_MAX_TOKENS,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Research Query: {query}\n\nAvailable Databases:\n{context}\n\nProvide relevant database recommendations:"}
+            ],
+            "dataSources": []
         }
 
         headers = {
