@@ -5,9 +5,10 @@ Utility functions for logging, validation, rate limiting, and error handling
 import logging
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, List, Tuple, Any
 from collections import deque
 import time
 from dataclasses import dataclass
@@ -260,3 +261,87 @@ def get_rate_limiter() -> RateLimiter:
     if _rate_limiter is None:
         _rate_limiter = RateLimiter(requests_per_minute=get_config().RATE_LIMIT_PER_MINUTE)
     return _rate_limiter
+
+
+# ==================== AI RESPONSE PARSING ====================
+
+def _names_match(name_a: str, name_b: str) -> bool:
+    """Return True when two database name strings are considered equivalent.
+
+    Performs a case-insensitive exact match as well as substring containment
+    in either direction, which covers minor wording differences between the
+    LLM's output and the canonical CSV name.
+    """
+    a = name_a.lower()
+    b = name_b.lower()
+    return a == b or a in b or b in a
+
+
+def parse_ai_response(ai_text: str) -> Tuple[str, Dict[str, str], List[str]]:
+    """Parse a structured AI response into its component parts.
+
+    Expects the LLM to follow the format::
+
+        SUMMARY: <brief overview>
+
+        1. <Database Name>
+        INSIGHT: <why this database is relevant>
+
+        2. <Database Name>
+        INSIGHT: <why this database is relevant>
+
+    Returns:
+        summary: The overview sentence(s).
+        insights: Mapping of database name → relevance insight.
+        ranked_names: Database names in the order the AI ranked them.
+
+    Falls back gracefully when the format is not followed — callers should
+    check whether the returned values are non-empty before relying on them.
+    """
+    summary = ""
+    insights: Dict[str, str] = {}
+    ranked_names: List[str] = []
+
+    _numbered_db = re.compile(r"^\d+\.\s+\*{0,2}(.+?)\*{0,2}\s*$")
+
+    try:
+        lines = ai_text.strip().split("\n")
+        current_db: Optional[str] = None
+        current_insight_parts: List[str] = []
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            # SUMMARY line
+            if stripped.upper().startswith("SUMMARY:"):
+                summary = stripped[len("SUMMARY:"):].strip()
+                current_db = None
+                current_insight_parts = []
+
+            # Numbered database line: "1. Database Name" or "1. **Database Name**"
+            elif match := _numbered_db.match(stripped):
+                # Save previous insight before moving to next database
+                if current_db and current_insight_parts:
+                    insights[current_db] = " ".join(current_insight_parts).strip()
+                current_db = match.group(1).strip()
+                ranked_names.append(current_db)
+                current_insight_parts = []
+
+            # INSIGHT line
+            elif stripped.upper().startswith("INSIGHT:") and current_db:
+                current_insight_parts = [stripped[len("INSIGHT:"):].strip()]
+
+            # Continuation of a multi-line insight
+            elif current_insight_parts:
+                current_insight_parts.append(stripped)
+
+        # Save the last insight
+        if current_db and current_insight_parts:
+            insights[current_db] = " ".join(current_insight_parts).strip()
+
+    except Exception:
+        pass
+
+    return summary, insights, ranked_names

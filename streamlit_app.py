@@ -25,6 +25,8 @@ from utils import (
     log_event,
     validate_csv,
     get_rate_limiter,
+    parse_ai_response,
+    _names_match,
 )
 
 # Validate config on startup
@@ -467,18 +469,26 @@ IMPORTANT REASONING STEPS:
 3. Do NOT recommend a database just because its name or description contains a superficial keyword match. Focus on subject-matter relevance.
 
 STRICT RULES:
-1. ONLY recommend databases from the provided list — never invent names or URLs
-2. ALWAYS include the exact database name and URL exactly as provided — do not modify or reconstruct URLs
+1. ONLY recommend databases from the provided list — never invent names
+2. Use the EXACT database name as listed — do not paraphrase or modify names
 3. Rank recommendations by subject relevance to the research field, not by keyword overlap
-4. Explain WHY each database is relevant to the research topic
-5. If fewer than 3 databases are truly relevant, recommend only the relevant ones — do not pad with poor matches
-6. Be concise but helpful (2-3 sentences per database)
-7. Mention any access requirements or registration needs
+4. For each database, explain WHY it is uniquely suited to this query — do NOT repeat or paraphrase the database description
+5. If fewer than 3 databases are truly relevant, recommend only those — do not pad with poor matches
+6. Be concise (1-2 sentences per database insight)
+7. Do NOT include URLs — they are displayed alongside the database cards
+8. Mention access requirements only if they significantly affect availability (e.g., requires separate registration)
 
-Format your response as:
-1. Brief intro identifying the research area
-2. List of recommended databases with explanations
-3. Any additional helpful notes about access or usage"""
+FORMAT YOUR RESPONSE EXACTLY AS FOLLOWS (no extra text before or after):
+
+SUMMARY: [1-2 sentence overview identifying the research area and which databases are most useful]
+
+1. [Exact Database Name]
+INSIGHT: [1-2 sentences explaining why this database uniquely fits the query — focus on what makes it relevant, not a repeat of its description]
+
+2. [Exact Database Name]
+INSIGHT: [1-2 sentences]
+
+(continue for all relevant databases, ranked by relevance)"""
 
         log_event("api_call_started", query=query, model=cfg.LLM_MODEL, provider="amplify")
 
@@ -547,6 +557,7 @@ Format your response as:
         logger.exception(f"Amplify response error: {e}")
         log_event("ai_response_error", query=query, error=str(e), provider="amplify")
         return None, f"Amplify request failed: {str(e)}"
+
 
 # ============================================
 # LOAD DATA
@@ -760,27 +771,60 @@ if st.session_state.last_query and st.session_state.last_results:
     ai_response = st.session_state.last_ai_response
     ai_error = st.session_state.last_ai_error
 
+    # Parse the structured AI response
+    ai_summary = ""
+    ai_insights: Dict[str, str] = {}
+    ai_ranked_names: List[str] = []
     if ai_response:
-        st.markdown("---")
-        st.markdown("## 🎯 Recommendations")
+        ai_summary, ai_insights, ai_ranked_names = parse_ai_response(ai_response)
+
+    # Recommendations — show only the compact summary so it isn't repetitive
+    st.markdown("---")
+    st.markdown("## 🎯 Recommendations")
+    if ai_summary:
+        st.info(ai_summary)
+    elif ai_response:
+        # Parsing failed — fall back to showing the full response
         st.markdown(ai_response)
     else:
         if ai_error:
             st.warning(ai_error)
         st.info("Showing top semantic matches while AI text generation is unavailable.")
 
-    # Result count
-    num_shown = len(results['metadatas'][0])
+    # Reorder database cards to match the AI's ranking when possible
+    result_metas = list(results['metadatas'][0])
+    if ai_ranked_names:
+        def _rank_key(meta: Dict) -> int:
+            for idx, ranked in enumerate(ai_ranked_names):
+                if _names_match(meta['name'], ranked):
+                    return idx
+            return len(ai_ranked_names)  # unranked entries go after AI-ranked ones
+        result_metas = sorted(result_metas, key=_rank_key)
+
+    # Database Details section
+    num_shown = len(result_metas)
     st.markdown("---")
     st.markdown(f"## 📚 Database Details")
     st.caption(f"Showing {num_shown} of {len(df)} databases")
 
-    for i, meta in enumerate(results['metadatas'][0]):
-        with st.expander(f"**{i+1}. {meta['name']}**", expanded=(i==0)):
+    for i, meta in enumerate(result_metas):
+        # Look up the AI insight for this database (fuzzy name match)
+        ai_insight = None
+        if ai_insights:
+            for ranked_name, insight in ai_insights.items():
+                if _names_match(meta['name'], ranked_name):
+                    ai_insight = insight
+                    break
+
+        with st.expander(f"**{i+1}. {meta['name']}**", expanded=(i == 0)):
 
             col1, col2 = st.columns([3, 1])
 
             with col1:
+                if ai_insight:
+                    st.markdown(f"**🤖 Why this database:** {ai_insight}")
+                    st.markdown("---")
+
                 st.markdown(f"**📖 Description:**")
                 st.write(meta['description'])
 
