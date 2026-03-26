@@ -11,10 +11,12 @@ import json
 
 from config import Config, get_config, validate_config
 from utils import (
-    validate_csv, 
-    RateLimiter, 
+    validate_csv,
+    RateLimiter,
     calculate_data_quality,
-    ValidationResult
+    ValidationResult,
+    parse_ai_response,
+    _names_match,
 )
 
 
@@ -157,6 +159,98 @@ class TestDataQuality:
         assert metrics['completeness']['C'] == 1.0
 
 
+# ==================== AI RESPONSE PARSING TESTS ====================
+
+class TestParseAIResponse:
+    """Test parse_ai_response helper"""
+
+    def test_parses_summary(self):
+        """SUMMARY line is extracted correctly"""
+        text = (
+            "SUMMARY: Great databases for legal research.\n\n"
+            "1. LexisNexis\nINSIGHT: Best for case law.\n"
+        )
+        summary, _, _ = parse_ai_response(text)
+        assert summary == "Great databases for legal research."
+
+    def test_parses_ranked_names(self):
+        """Database names are extracted in ranked order"""
+        text = (
+            "SUMMARY: Overview.\n\n"
+            "1. JSTOR\nINSIGHT: Strong humanities coverage.\n\n"
+            "2. ProQuest\nINSIGHT: Broad multidisciplinary content.\n"
+        )
+        _, _, ranked = parse_ai_response(text)
+        assert ranked == ["JSTOR", "ProQuest"]
+
+    def test_parses_insights(self):
+        """INSIGHT text is mapped to the correct database name"""
+        text = (
+            "SUMMARY: Overview.\n\n"
+            "1. JSTOR\nINSIGHT: Strong humanities coverage.\n\n"
+            "2. ProQuest\nINSIGHT: Broad multidisciplinary content.\n"
+        )
+        _, insights, _ = parse_ai_response(text)
+        assert "JSTOR" in insights
+        assert insights["JSTOR"] == "Strong humanities coverage."
+        assert insights["ProQuest"] == "Broad multidisciplinary content."
+
+    def test_handles_bold_database_names(self):
+        """Bold markdown around names is stripped"""
+        text = (
+            "SUMMARY: Overview.\n\n"
+            "1. **LexisNexis**\nINSIGHT: Primary legal resource.\n"
+        )
+        _, insights, ranked = parse_ai_response(text)
+        assert ranked == ["LexisNexis"]
+        assert "LexisNexis" in insights
+
+    def test_handles_malformed_response_gracefully(self):
+        """Malformed text returns empty structures without raising"""
+        text = "Sorry, I cannot help with that request."
+        summary, insights, ranked = parse_ai_response(text)
+        assert summary == ""
+        assert insights == {}
+        assert ranked == []
+
+    def test_handles_empty_string(self):
+        """Empty string input returns empty structures"""
+        summary, insights, ranked = parse_ai_response("")
+        assert summary == ""
+        assert insights == {}
+        assert ranked == []
+
+    def test_multiline_insight_joined(self):
+        """Insight that spans multiple lines is joined into one string"""
+        text = (
+            "SUMMARY: Overview.\n\n"
+            "1. ScienceDirect\n"
+            "INSIGHT: Covers natural sciences.\n"
+            "Especially strong for chemistry and biology.\n"
+        )
+        _, insights, _ = parse_ai_response(text)
+        assert "chemistry" in insights.get("ScienceDirect", "")
+
+
+class TestNamesMatch:
+    """Test _names_match helper"""
+
+    def test_exact_match(self):
+        assert _names_match("JSTOR", "JSTOR") is True
+
+    def test_case_insensitive(self):
+        assert _names_match("jstor", "JSTOR") is True
+
+    def test_substring_a_in_b(self):
+        assert _names_match("JSTOR", "JSTOR: Scholarly Journals") is True
+
+    def test_substring_b_in_a(self):
+        assert _names_match("JSTOR: Scholarly Journals", "JSTOR") is True
+
+    def test_no_match(self):
+        assert _names_match("ProQuest", "LexisNexis") is False
+
+
 # ==================== INTEGRATION TESTS ====================
 
 class TestIntegration:
@@ -188,3 +282,4 @@ class TestIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
