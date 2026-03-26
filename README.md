@@ -11,6 +11,17 @@ AI-powered chatbot to help users discover relevant databases from Vanderbilt Uni
 - 📱 **Mobile-Responsive Design**: Works seamlessly on desktop and mobile devices
 - 🎨 **Vanderbilt Branding**: Custom UI with institutional colors and typography
 - 💬 **User Feedback**: Built-in feedback mechanism to improve recommendations
+- ✅ **PRD Compliance Guardrails**: Strict spreadsheet-only matching, URL verification, and top-5 ranked output
+
+## PRD Requirements
+
+Mandatory product requirements are captured in `PRD.md`.
+
+The app enforces these key constraints:
+- Uses only the Vanderbilt Databases A-Z spreadsheet as source of truth
+- Returns only exact database names found in the spreadsheet
+- Builds links only from the same-row `Friendly_URL` value (or required fallback)
+- Applies an internal verification gate before rendering results
 
 ## Quick Start
 

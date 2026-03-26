@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import sys
-import requests
 
 # ChromaDB requires sqlite >= 3.35; swap in pysqlite3 when available.
 if sqlite3.sqlite_version_info < (3, 35, 0):
@@ -25,8 +24,11 @@ from utils import (
     log_event,
     validate_csv,
     get_rate_limiter,
-    parse_ai_response,
-    _names_match,
+    is_query_too_vague,
+    rank_databases_from_spreadsheet,
+    verify_prd_candidates,
+    build_query_matched_explanation,
+    RESEARCH_GUIDES_FALLBACK_URL,
 )
 
 # Validate config on startup
@@ -125,10 +127,6 @@ if 'negative_feedback' not in st.session_state:
     st.session_state.negative_feedback = []
 if 'last_results' not in st.session_state:
     st.session_state.last_results = None
-if 'last_ai_response' not in st.session_state:
-    st.session_state.last_ai_response = None
-if 'last_ai_error' not in st.session_state:
-    st.session_state.last_ai_error = None
 if 'last_query' not in st.session_state:
     st.session_state.last_query = None
 
@@ -569,11 +567,6 @@ try:
     if df.empty:
         st.error("❌ Failed to load database. Please contact library support.")
         st.stop()
-    
-    collection = init_vector_search(df)
-    if collection is None:
-        st.error("❌ Failed to initialize ChromaDB semantic search.")
-        st.stop()
 
 except Exception as e:
     logger.exception(f"Fatal initialization error: {e}")
@@ -702,8 +695,6 @@ with col2:
     if clear_button:
         st.session_state.query = ""
         st.session_state.last_results = None
-        st.session_state.last_ai_response = None
-        st.session_state.last_ai_error = None
         st.session_state.last_query = None
         st.rerun()
 
@@ -719,131 +710,89 @@ if search_button and query.strip():
             st.session_state.search_history.pop(0)
         st.session_state.search_history.append(query)
     
-    with st.spinner("🔍 Searching databases..."):
-        
-        # Get Amplify token early — needed for query expansion and AI response
-        amp_token = st.secrets.get("AMPLIFY_TOKEN") or os.getenv("AMPLIFY_TOKEN")
-        if not amp_token:
-            st.error("⚠️ AMPLIFY_TOKEN not found in secrets.toml or environment.")
-            logger.error("AMPLIFY_TOKEN not found in secrets or env")
-            st.stop()
-
-        # Expand query with subject terms for better semantic search
-        expanded_query = expand_query(query, amp_token)
-
-        # Perform search with more candidates, let LLM rank them
-        results = search_databases(expanded_query, collection, cfg.SEARCH_CANDIDATES)
-        
-        # Apply subject filter if selected
-        if results and results['metadatas'] and selected_subjects:
-            filtered_indices = [
-                i for i, meta in enumerate(results['metadatas'][0])
-                if any(
-                    subj.strip() in selected_subjects
-                    for subj in str(meta.get('subjects', '')).split(',')
-                )
-            ]
-            results = {
-                'metadatas': [[results['metadatas'][0][i] for i in filtered_indices]],
-                'documents': [[results['documents'][0][i] for i in filtered_indices]] if results.get('documents') else results.get('documents'),
-                'distances': [[results['distances'][0][i] for i in filtered_indices]] if results.get('distances') else results.get('distances'),
-                'ids': [[results['ids'][0][i] for i in filtered_indices]] if results.get('ids') else results.get('ids'),
+    with st.spinner("🔍 Ranking databases from the Databases A-Z spreadsheet..."):
+        if is_query_too_vague(query):
+            st.session_state.last_results = {
+                "clarify": "Could you share one specific subject area or course context so I can rank the top databases accurately?"
             }
-        
-        if results and results['metadatas'] and results['metadatas'][0]:
-            # Generate AI response
-            ai_response, ai_error = generate_ai_response(query, results, amp_token)
-
-            # Store results in session state so they persist across reruns
-            st.session_state.last_results = results
-            st.session_state.last_ai_response = ai_response
-            st.session_state.last_ai_error = ai_error
             st.session_state.last_query = query
         else:
-            st.session_state.last_results = None
-            st.session_state.last_ai_response = None
-            st.session_state.last_ai_error = None
+            ranked = rank_databases_from_spreadsheet(df, query, top_k=cfg.SEARCH_TOP_K)
+
+            if selected_subjects:
+                ranked = [
+                    item for item in ranked
+                    if any(subj.strip() in selected_subjects for subj in str(item.get("subjects", "")).split(","))
+                ]
+
+            verified = verify_prd_candidates(ranked, df)
+
+            log_event(
+                "prd_verification",
+                query=query,
+                candidates=len(ranked),
+                verified=len(verified),
+                discarded=max(0, len(ranked) - len(verified)),
+            )
+
+            st.session_state.last_results = {
+                "items": verified,
+                "candidate_count": len(ranked),
+            }
             st.session_state.last_query = query
 
 # Display persisted results
 if st.session_state.last_query and st.session_state.last_results:
-    results = st.session_state.last_results
-    ai_response = st.session_state.last_ai_response
-    ai_error = st.session_state.last_ai_error
+    results_payload = st.session_state.last_results
 
-    # Parse the structured AI response
-    ai_summary = ""
-    ai_insights: Dict[str, str] = {}
-    ai_ranked_names: List[str] = []
-    if ai_response:
-        ai_summary, ai_insights, ai_ranked_names = parse_ai_response(ai_response)
+    if results_payload.get("clarify"):
+        st.markdown("---")
+        st.info(results_payload["clarify"])
 
-    # Recommendations — show only the compact summary so it isn't repetitive
+    items = results_payload.get("items", [])
+
+    # Recommendations summary
     st.markdown("---")
     st.markdown("## 🎯 Recommendations")
-    if ai_summary:
-        st.info(ai_summary)
-    elif ai_response:
-        # Parsing failed — fall back to showing the full response
-        st.markdown(ai_response)
+    if items:
+        st.info(f"Top {len(items)} database match(es) ranked from the Vanderbilt Databases A-Z spreadsheet.")
     else:
-        if ai_error:
-            st.warning(ai_error)
-        st.info("Showing top semantic matches while AI text generation is unavailable.")
-
-    # Reorder database cards to match the AI's ranking when possible
-    result_metas = list(results['metadatas'][0])
-    if ai_ranked_names:
-        def _rank_key(meta: Dict) -> int:
-            for idx, ranked in enumerate(ai_ranked_names):
-                if _names_match(meta['name'], ranked):
-                    return idx
-            return len(ai_ranked_names)  # unranked entries go after AI-ranked ones
-        result_metas = sorted(result_metas, key=_rank_key)
+        st.info("No strong matches were found in the Databases A-Z list.")
 
     # Database Details section
-    num_shown = len(result_metas)
+    num_shown = len(items)
     st.markdown("---")
     st.markdown(f"## 📚 Database Details")
     st.caption(f"Showing {num_shown} of {len(df)} databases")
 
-    for i, meta in enumerate(result_metas):
-        # Look up the AI insight for this database (fuzzy name match)
-        ai_insight = None
-        if ai_insights:
-            for ranked_name, insight in ai_insights.items():
-                if _names_match(meta['name'], ranked_name):
-                    ai_insight = insight
-                    break
-
-        with st.expander(f"**{i+1}. {meta['name']}**", expanded=(i == 0)):
+    for i, item in enumerate(items):
+        with st.expander(f"**{i+1}. {item['name']}**", expanded=(i == 0)):
 
             col1, col2 = st.columns([3, 1])
 
             with col1:
-                if ai_insight:
-                    st.markdown(f"**🤖 Why this database:** {ai_insight}")
-                    st.markdown("---")
+                explanation = build_query_matched_explanation(
+                    st.session_state.last_query,
+                    item.get("description", ""),
+                    item.get("subjects", ""),
+                )
+                st.markdown(f"**🤖 Why this database:** {explanation}")
+                st.markdown("---")
 
                 st.markdown(f"**📖 Description:**")
-                st.write(meta['description'])
+                st.write(item.get("description", ""))
 
-                if meta['subjects']:
-                    st.markdown(f"**🏷️ Subjects:** {meta['subjects']}")
-
-                if meta['primary_library']:
-                    st.markdown(f"**🏛️ Primary Library:** {meta['primary_library']}")
-
-                if meta['alt_names']:
-                    st.caption(f"_Also known as: {meta['alt_names']}_")
+                if item.get("subjects"):
+                    st.markdown(f"**🏷️ Subjects:** {item.get('subjects', '')}")
 
             with col2:
-                if meta.get('friendly_url') and meta['friendly_url'] not in ('', 'nan'):
-                    full_url = f"https://researchguides.library.vanderbilt.edu/{meta['friendly_url']}"
-                    st.markdown(f"### [🔗 Access Database]({full_url})")
+                full_url = item.get("url", RESEARCH_GUIDES_FALLBACK_URL)
+                st.markdown(f"### [🔗 Access Database]({full_url})")
 
-                if meta['more_info'] and len(meta['more_info']) > 10:
-                    st.info(f"ℹ️ {meta['more_info'][:200]}")
+                if full_url == RESEARCH_GUIDES_FALLBACK_URL:
+                    st.caption(
+                        f"Friendly URL is blank for this row. Search for exact name '{item['name']}' on the A-Z page."
+                    )
 
     # Feedback section
     st.markdown("---")

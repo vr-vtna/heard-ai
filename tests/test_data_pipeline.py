@@ -17,6 +17,10 @@ from utils import (
     ValidationResult,
     parse_ai_response,
     _names_match,
+    build_required_database_url,
+    rank_databases_from_spreadsheet,
+    verify_prd_candidates,
+    RESEARCH_GUIDES_FALLBACK_URL,
 )
 
 
@@ -278,6 +282,69 @@ class TestIntegration:
         result = validate_csv(df)
         assert result.is_valid is True
         assert result.record_count >= cfg.CSV_MIN_ROWS
+
+
+class TestPRDCompliance:
+    """Test strict PRD constraints for name and URL verification."""
+
+    def create_prd_df(self):
+        return pd.DataFrame({
+            'ID': [1, 2, 3, 4, 5, 6],
+            'Name': ['JSTOR', 'ProQuest Central', 'PsycINFO', 'LexisNexis', 'PubMed', 'Music Index'],
+            'Description': [
+                'Scholarly journals in humanities and social sciences',
+                'Multidisciplinary academic content and newspapers',
+                'Psychology and behavioral science literature',
+                'Legal research database with case law and statutes',
+                'Biomedical and life sciences citations',
+                'Music research, periodicals, and reference content',
+            ],
+            'URL': [''] * 6,
+            'Last_Updated': ['2026-03-01'] * 6,
+            'Primary_Library': ['Central'] * 6,
+            'Alt_Names': ['', '', '', '', '', ''],
+            'Unused1': ['', '', '', '', '', ''],
+            'Friendly_URL': ['jstor', 'proquestcentral', '', 'lexisnexis', 'pubmed', 'musicindex'],
+            'Subjects': ['Humanities', 'Multidisciplinary', 'Psychology', 'Law', 'Medicine', 'Music'],
+            'Unused2': ['', '', '', '', '', ''],
+            'More_Info': ['', '', '', '', '', '']
+        })
+
+    def test_build_required_database_url_uses_fallback_when_blank(self):
+        assert build_required_database_url('') == RESEARCH_GUIDES_FALLBACK_URL
+
+    def test_build_required_database_url_concatenates_exact_value(self):
+        value = 'az/specialSlug-ABC_1'
+        assert build_required_database_url(value) == f'https://researchguides.library.vanderbilt.edu/{value}'
+
+    def test_verify_discards_name_not_exact_match(self):
+        df = self.create_prd_df()
+        candidates = [{
+            'name': 'JSTOR Database',
+            'description': 'x',
+            'subjects': 'x',
+            'friendly_url': 'jstor',
+            'score': 20,
+        }]
+        verified = verify_prd_candidates(candidates, df)
+        assert verified == []
+
+    def test_verify_discards_friendly_url_not_same_row(self):
+        df = self.create_prd_df()
+        candidates = [{
+            'name': 'JSTOR',
+            'description': 'x',
+            'subjects': 'x',
+            'friendly_url': 'wrong-slug',
+            'score': 20,
+        }]
+        verified = verify_prd_candidates(candidates, df)
+        assert verified == []
+
+    def test_rank_returns_max_five(self):
+        df = self.create_prd_df()
+        ranked = rank_databases_from_spreadsheet(df, 'research database academic literature law psychology medicine music humanities', top_k=10)
+        assert len(ranked) <= 5
 
 
 if __name__ == "__main__":

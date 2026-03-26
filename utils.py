@@ -345,3 +345,152 @@ def parse_ai_response(ai_text: str) -> Tuple[str, Dict[str, str], List[str]]:
         pass
 
     return summary, insights, ranked_names
+
+
+# ==================== PRD-COMPLIANT RANKING ====================
+
+RESEARCH_GUIDES_BASE_URL = "https://researchguides.library.vanderbilt.edu/"
+RESEARCH_GUIDES_FALLBACK_URL = "https://researchguides.library.vanderbilt.edu/az/databases"
+
+
+def is_query_too_vague(query: str) -> bool:
+    """Return True when query is too short or generic to rank reliably."""
+    cleaned = re.sub(r"\s+", " ", query.strip().lower())
+    if not cleaned:
+        return True
+
+    words = re.findall(r"[a-z0-9]+", cleaned)
+    if len(words) < 2:
+        return True
+
+    generic_terms = {
+        "help", "database", "databases", "research", "article", "articles",
+        "journal", "journals", "source", "sources", "find", "need", "looking",
+        "search", "topic", "paper", "papers", "info", "information",
+    }
+    informative_words = [w for w in words if w not in generic_terms]
+    return len(informative_words) == 0
+
+
+def build_required_database_url(friendly_url: str) -> str:
+    """Build URL exactly from Friendly URL value or fallback when blank."""
+    if friendly_url is None:
+        return RESEARCH_GUIDES_FALLBACK_URL
+
+    value = str(friendly_url)
+    if value.strip() == "" or value.strip().lower() == "nan":
+        return RESEARCH_GUIDES_FALLBACK_URL
+
+    # Must concatenate exactly without normalizing casing or slug content.
+    return f"{RESEARCH_GUIDES_BASE_URL}{value}"
+
+
+def _tokenize_for_match(text: str) -> List[str]:
+    return re.findall(r"[a-z0-9]+", str(text).lower())
+
+
+def _score_row_relevance(row: pd.Series, query_tokens: List[str]) -> int:
+    """Compute a deterministic relevance score from spreadsheet metadata only."""
+    name_tokens = set(_tokenize_for_match(row.get("Name", "")))
+    desc_tokens = set(_tokenize_for_match(row.get("Description", "")))
+    subj_tokens = set(_tokenize_for_match(row.get("Subjects", "")))
+    alt_tokens = set(_tokenize_for_match(row.get("Alt_Names", "")))
+    more_tokens = set(_tokenize_for_match(row.get("More_Info", "")))
+
+    score = 0
+    for token in query_tokens:
+        if token in name_tokens:
+            score += 6
+        if token in desc_tokens:
+            score += 4
+        if token in subj_tokens:
+            score += 5
+        if token in alt_tokens:
+            score += 3
+        if token in more_tokens:
+            score += 2
+    return score
+
+
+def rank_databases_from_spreadsheet(df: pd.DataFrame, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    """Rank databases by evaluating all spreadsheet rows using only row metadata."""
+    query_tokens = _tokenize_for_match(query)
+    if not query_tokens:
+        return []
+
+    candidates: List[Dict[str, Any]] = []
+    for _, row in df.iterrows():
+        score = _score_row_relevance(row, query_tokens)
+        if score <= 0:
+            continue
+
+        name = str(row.get("Name", ""))
+        description = str(row.get("Description", ""))
+        subjects = str(row.get("Subjects", ""))
+        friendly_url = str(row.get("Friendly_URL", ""))
+
+        candidates.append({
+            "name": name,
+            "description": description,
+            "subjects": subjects,
+            "friendly_url": friendly_url,
+            "score": score,
+        })
+
+    candidates.sort(key=lambda item: (-item["score"], item["name"]))
+    return candidates[:max(1, min(int(top_k), 5))]
+
+
+def verify_prd_candidates(candidates: List[Dict[str, Any]], df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Mandatory self-check: keep only candidates that exactly match spreadsheet rows."""
+    verified: List[Dict[str, Any]] = []
+
+    for candidate in candidates:
+        name = str(candidate.get("name", ""))
+        if name == "":
+            continue
+
+        matched = df[df["Name"].astype(str) == name]
+        if matched.empty:
+            continue
+
+        row = matched.iloc[0]
+        row_friendly = str(row.get("Friendly_URL", ""))
+        if row_friendly.strip().lower() == "nan":
+            row_friendly = ""
+
+        # Mandatory check: candidate friendly URL must come from same exact row.
+        candidate_friendly = str(candidate.get("friendly_url", ""))
+        if candidate_friendly.strip().lower() == "nan":
+            candidate_friendly = ""
+
+        if candidate_friendly != row_friendly:
+            continue
+
+        description = str(row.get("Description", ""))
+        subjects = str(row.get("Subjects", ""))
+        url = build_required_database_url(row_friendly)
+
+        verified.append({
+            "name": name,
+            "description": description,
+            "subjects": subjects,
+            "friendly_url": row_friendly,
+            "url": url,
+            "score": int(candidate.get("score", 0)),
+        })
+
+    return verified
+
+
+def build_query_matched_explanation(query: str, description: str, subjects: str) -> str:
+    """Generate concise explanation grounded in Column C and row metadata."""
+    desc = str(description).strip()
+    desc_compact = re.sub(r"\s+", " ", desc)
+    if len(desc_compact) > 220:
+        desc_compact = desc_compact[:217].rstrip() + "..."
+
+    subjects_compact = re.sub(r"\s+", " ", str(subjects).strip())
+    if subjects_compact and subjects_compact.lower() != "nan":
+        return f"Column C notes: {desc_compact} This aligns with your query on '{query}' through subject coverage in {subjects_compact}."
+    return f"Column C notes: {desc_compact} This aligns with your query on '{query}'."
